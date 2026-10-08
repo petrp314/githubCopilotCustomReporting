@@ -15,8 +15,9 @@ different datasets; no single endpoint supplies all requested statistics.
 A custom web application on GitHub Pages is feasible as a STATIC dashboard.
 Recommended first release: scheduled GitHub Actions collect REST API data,
 normalize it, and publish approved aggregate JSON alongside the private Pages
-site. The browser reads that JSON, not privileged enterprise APIs. Use a secure
-operator-import process for token-level AI usage reports where necessary.
+site. The browser reads that JSON, not privileged enterprise APIs. Prefer the
+documented asynchronous billing-export API for AI usage reports, validating its
+token columns in the tenant; retain secure operator imports as a fallback.
 
 Use a backend API and enterprise SSO instead if different viewers require
 different cost-center permissions, named-user drilldowns, protected uploads, or
@@ -27,12 +28,13 @@ Important findings:
 - Actual token data IS documented: the AI usage report includes input, output,
   cache_read, and cache_write by user/model. Do not incorrectly claim GitHub
   exposes no tokens. This is a billing report, not the adoption metrics API. [S1]
-- The documented AI credit REST endpoint exposes credit/quantity and monetary
-  fields, but not those four token fields. A fully REST-only token dashboard
-  is therefore not established by the sources reviewed. [S2]
-- The documented report retrieval flow uses the billing UI and an emailed
-  download link. Token automation is a discovery gate, not a promised feature.
-  Support authorized report imports unless a supported API is verified. [S3]
+- The AI credit usage-summary endpoint lacks those token columns, but a SEPARATE
+  asynchronous billing-export REST API supports report_type=ai_credit. Prefer
+  that supported automation path; verify the downloaded schema before promising
+  complete per-user/model token coverage. UI/email imports are a fallback. [S2, S16]
+- Usage telemetry also exposes CLI and Copilot app prompt/output token counts.
+  These are surface-specific, not general per-model IDE token totals. Do not add
+  these counts to billing-report tokens: they may measure overlapping usage. [S18]
 - AI credits, premium requests, model interactions, and model tokens are
   separate units. They must never be relabeled or added together.
 - EMU Pages sites must be private, organization-owned project sites. This
@@ -108,19 +110,43 @@ but restricted response must not be presented as an enterprise total. [S2, S4]
 
 3.2 Token detail and billing exports
 
+Supported automated export workflow: [S16]
+- POST /enterprises/{enterprise}/settings/billing/reports initiates an export
+  with report_type=ai_credit, start_date, and end_date; returns HTTP 202 and an ID.
+- GET /enterprises/{enterprise}/settings/billing/reports/{report_id} returns
+  processing/completed/failed status and download_urls when available.
+- GET /enterprises/{enterprise}/settings/billing/reports lists generated exports.
+- Download every returned file, validate the actual schema and requested dates,
+  and ingest only completed exports. Poll with bounded backoff, persist job IDs,
+  and handle failure/expiry without creating uncontrolled duplicate exports.
+- Generated export records remain available for 31 days after completion/failure;
+  eligible underlying usage may extend up to 24 months, subject to enterprise
+  creation/migration and report-type date-range limits. These are different limits.
+- Enterprise admins, billing managers, and appropriate custom billing readers can
+  use these routes. Enterprise-installed Apps with enterprise billing read access
+  are supported; do not request enterprise-administration write access when the
+  narrower permission suffices. send_email defaults to false.
+
+Creating a report is the only planned POST operation. It generates a reporting
+artifact, not a mutation of licenses, budgets, cost centers, or user provisioning.
+The API confirms automated ai_credit exports; its response describes the export
+job rather than the downloaded columns. Confirm input/output/cache columns and
+tenant entitlement with a sample. This is a schema-validation gate, not evidence
+that automated billing exports are unavailable.
+
 The AI usage report documents date/model/username aggregation and token fields
 input, output, cache_read, cache_write. Its maximum requested period is 31 days.
 The detailed metered usage report is also limited to 31 days; the summarized
 report supports up to one year per report. Detailed metered exports add username
 and workflow_path, and are not obtainable from the REST /usage endpoint. [S1]
 
-The published download process is: authorized operator requests the report in
+The alternative UI download process is: authorized operator requests the report in
 the billing UI, receives an email, and downloads using a link that expires after
 24 hours. Only one usage report per account can be requested at a time. [S1, S3]
 Do not confuse this link lifetime or report interval with historical retention.
 
-Required fallback: operator imports an authorized AI usage report into protected
-storage, or into an explicitly local-only browser session for an approved
+Required fallback if API exports are unavailable: operator imports an authorized
+AI usage report into protected storage, or into a local-only browser session for an approved
 single-user analysis. A local-only import is not a persistent shared dashboard.
 For a shared Pages snapshot, ingest through the protected collection process,
 never through a public repository, issue, pull request, or artifact.
@@ -184,6 +210,84 @@ historical aggregates. Do not infer identity from email prefixes or EMU suffixes
 IdP department/cost-center attributes are optional enrichment, not automatically
 the same as GitHub billing cost centers. No SCIM write credential is needed.
 
+3.5 Adoption and model-activity telemetry
+
+Use current Copilot usage metrics, not legacy metrics definitions. The following
+GET routes are under /enterprises/{enterprise}/copilot/metrics/reports/: [S17]
+- enterprise-1-day?day=YYYY-MM-DD: daily enterprise aggregate.
+- enterprise-28-day/latest: latest processed 28-day enterprise window.
+- users-1-day?day=YYYY-MM-DD: daily per-user activity.
+- users-28-day/latest: latest processed 28-day per-user window.
+- user-teams-1-day?day=YYYY-MM-DD: optional daily user/team mapping.
+Repository pull-request reports are available separately but not required here.
+
+Responses contain download_links plus report_day or report_start_day/report_end_day,
+not inline metric rows. Download ALL links and parse NDJSON. These endpoints do
+not document page/per_page; report parts are not seat-list pagination. Signed
+links expire; do not assume the email report's 24-hour lifetime applies here.
+Enterprise daily aggregate/user history starts 2025-10-10, with up to one year
+accessible. Persist approved data for longer trends; do not promise earlier data.
+
+Access requires the enterprise Copilot usage metrics policy "Enabled everywhere"
+and an authorized enterprise owner, billing manager, or View Enterprise Copilot
+Metrics role. Classic PAT/OAuth scopes are read:enterprise OR
+manage_billing:copilot. GitHub App user/installation tokens support Enterprise
+Copilot metrics: read. Fine-grained PAT support was not established. [S17, S22]
+Pin the supported API version; current examples use 2026-03-10 with
+Accept: application/vnd.github+json. Revalidate version support at implementation.
+
+Detailed IDE reporting depends on supported clients and enabled telemetry.
+Server-side signals can count active users with empty detailed activity arrays;
+do not define all active users as user_initiated_interaction_count > 0.
+Keep Unknown dimensions rather than silently excluding them. Organization usage
+is membership-attributed and can overlap; it is not necessarily usage occurring
+inside that organization's repositories. [S19, S20]
+
+Definitions to retain exactly from the source: [S18]
+- daily_active_users: unique daily users.
+- weekly_active_users: trailing seven-day unique users.
+- monthly_active_users: trailing 28-day unique users, NOT a calendar month.
+- Feature engaged_user_count: users engaging on at least two distinct days in
+  the 28-day window. Feature populations overlap.
+- Adoption-phase total_engaged_users: phase members active on that day;
+  users_in_phase_28d: the rolling phase population. Neither is a license count.
+- Model activity arrays totals_by_model_feature and totals_by_language_model
+  describe documented chat activity, not universal completion/model token counts.
+- Per-user ai_credits_used is consumption telemetry, not invoice truth or a
+  per-model/per-feature/per-surface credit breakdown.
+- totals_by_cli.token_usage and totals_by_copilot_app.token_usage expose
+  prompt_tokens_sum and output_tokens_sum. Preserve surface and source scope;
+  these objects do not establish model or cache-category breakdowns.
+
+The overview describes availability within two full UTC days; reconciliation
+describes typical finalization within three. Treat recent periods as provisional
+and re-fetch them; do not promise real-time or guaranteed two-day final data.
+For optional team reports, join usage and membership on matching user/day/scope,
+not a 28-day activity window to today's membership. Teams with fewer than five
+seated users are omitted from daily team mappings; this is not a blanket minimum
+for enterprise reports. Team mappings are not native billing cost centers. [S20, S23]
+
+3.6 License and activity roster
+
+GET /enterprises/{enterprise}/copilot/billing/seats supplies current billed seat
+assignments; paginate with page/per_page (50 records by default, maximum 100). Paginate
+fully. total_seats deduplicates people, but seats may contain multiple grants from
+organizations/enterprise teams for one user. Deduplicate non-null assignee.id;
+preserve grants separately. Assignee and organization can be null. [S21]
+
+Useful fields include assignee.login, created_at, pending_cancellation_date,
+last_activity_at, last_authenticated_at, and plan_type. Join assignee.id to usage
+user_id where available and snapshot current assignments for historical counts.
+The endpoint documents enterprise owners/billing managers and classic PAT scopes
+read:enterprise OR manage_billing:copilot. App/fine-grained PAT support for this
+seat endpoint was not verified; metrics App support does not establish roster
+support. Approve an endpoint-specific credential exception if necessary.
+
+last_activity_at may lag by 24 hours and becomes nil after 90 days without
+activity. A null value is not proof of "never used". Authentication is not the
+same as usage. The separate activity CSV's 30-minute refresh does not establish
+the usage metrics API's freshness. [S24]
+
 4. DELIVERY ARCHITECTURE: CAN THIS RUN ON GITHUB PAGES?
 
 4.1 Option A: private Pages + scheduled collection (recommended conditional MVP)
@@ -205,7 +309,7 @@ Conditions for choosing A:
 - All site viewers may access ALL data shipped with the site.
 - Daily/source-delayed reporting is acceptable.
 - Approved aggregates fit a static, partitioned dataset.
-- Operators accept token imports until supported API automation is proven.
+- Operators accept a token-import fallback if export access/schema validation fails.
 - Enterprise policies allow Pages, Actions, credentials, and the storage region.
 
 Use an organization-owned PRIVATE repository with explicitly granted readers,
@@ -314,10 +418,12 @@ an explicit maintained mapping and an unresolved bucket.
 
 FR-04 Tokens (MVP with source dependency)
 Show input, output, cache-read, and cache-write token trends by supported report
-dimensions. Provide a visible report-import status, range, source, and coverage.
+dimensions. Provide a visible API-export/import status, range, source, and coverage.
 Unsupported periods/categories are unavailable, not zero. Clearly label partial
 Copilot surface coverage. If reports cannot be obtained, this requirement is
 blocked pending stakeholder acceptance; credits are not a token substitute.
+Present CLI/app telemetry tokens separately from billing-report tokens; never
+sum overlapping sources or imply CLI/app aggregates supply model/cache breakdowns.
 
 FR-05 Billing (MVP)
 Show gross usage, included/discounted usage, net billed usage, and source monetary
@@ -388,8 +494,9 @@ analytical approximation. Do not rewrite historical costs when a center is renam
 deleted, or gains members. No synthetic backfill before source data is available.
 
 Security/privacy:
-- Data collection is read-only and enterprise-bound; fail closed on host/scope
-  misconfiguration. Configure github.com versus GHE.com endpoints explicitly.
+- Data access is reporting-only, with POST permitted solely to generate exports;
+  fail closed on host/scope misconfiguration. Configure github.com versus GHE.com
+  endpoints explicitly.
 - TLS, encrypted protected storage, managed secrets, credential rotation,
   least-privilege access, and audited administrative/import/export actions.
 - Minimize employee data. No prompts, completions, code, emails, or IdP attributes
@@ -408,7 +515,8 @@ Security/privacy:
 Proposed operational targets, subject to stakeholder approval:
 - Collect daily; refresh available API-derived snapshots within 24 hours of
   upstream publication, not within 24 hours of the original user interaction.
-- Show token imports' independent freshness; never imply they follow API cadence.
+- Show token exports/imports' independent freshness; never imply they follow
+  adoption telemetry cadence.
 - Alert after two missed expected collection cycles and preserve last good data.
 - Retain 13 months of approved daily aggregates; approve a shorter explicit
   retention for raw/named-user data and enforce expiry in all copies.
@@ -434,6 +542,9 @@ AC-03 Tokens: an authorized representative AI usage report reproduces each token
 category exactly by date/model. Reimporting overlapping/corrected reports does not
 duplicate values. Missing token data displays unavailable. A token-to-center join
 with insufficient evidence is labeled analytical/unknown, never billed fact.
+The asynchronous export handles processing, completion, failure, and multiple
+download URLs; imported fallback and API export for the same period are not
+double counted. CLI/app token totals remain separate from billing token totals.
 
 AC-04 Cost centers: direct assignment, multiple enterprise teams, multiple license
 organizations, movement between centers, rename, deletion, and unassigned usage
@@ -477,7 +588,8 @@ Phase 0: validate source access and choose the delivery boundary.
 - Compare native GitHub adoption/billing views with the requested cross-source
   history and cost-center views; avoid rebuilding features without added value.
 - Decide option A only if a single common aggregate audience is sufficient;
-  otherwise choose option B. Approve token import and its operating owner.
+  otherwise choose option B. Validate asynchronous ai_credit export columns and
+  approve the fallback token-import process and its operating owner.
 Exit: demonstrable data for each core metric, or explicit blocked requirements
 and stakeholder-approved fallback; approved architecture and privacy boundary.
 
@@ -505,14 +617,15 @@ unresolved critical data-exposure or financial-reconciliation issue.
 Phase 4: optional expansion.
 - Add approved scoped drilldowns, budgets, forecasts, and digests only after the
   corresponding sources, authorization, and unit semantics are verified.
-- Replace token imports only when a supported token-report API is demonstrated.
+- Retire fallback token imports once automated exports meet agreed coverage
+  and reliability requirements in the actual tenant.
 
 Decisions needed before implementation:
 1. Enterprise slug/API host, organization deployment location, and owning team?
 2. Aggregate shared audience or cost-center-specific/individual permissions?
 3. Copilot plans, billing contract, and periods spanning differing billing regimes?
-4. Is an operator-imported AI token report acceptable, or is full automation a
-   launch requirement that must wait for verified supported token access?
+4. Does the tenant's ai_credit export contain all required token dimensions?
+   Is operator import acceptable if automated access/schema validation fails?
 5. Which identity source defines provisioned users and historical license scope?
 6. Are GitHub billing cost centers authoritative, or is a separate finance/IdP
    allocation view also required? Who approves mapping discrepancies?
@@ -557,3 +670,21 @@ https://docs.github.com/en/enterprise-cloud@latest/pages/getting-started-with-gi
 https://docs.github.com/en/rest/using-the-rest-api/using-cors-and-jsonp-to-make-cross-origin-requests
 [S15] Copilot budget and included-pool semantics:
 https://docs.github.com/en/enterprise-cloud@latest/copilot/concepts/billing-and-usage/organizations-and-enterprises/budgets
+[S16] Asynchronous enterprise billing report exports:
+https://docs.github.com/en/enterprise-cloud@latest/rest/billing/usage-reports
+[S17] Current Copilot usage report endpoints:
+https://docs.github.com/en/enterprise-cloud@latest/rest/copilot/copilot-usage-metrics
+[S18] Usage metric definitions, models, CLI/app tokens, and per-user credits:
+https://docs.github.com/en/copilot/reference/copilot-usage-metrics/copilot-usage-metrics
+[S19] Usage metrics overview, attribution, and availability:
+https://docs.github.com/en/copilot/concepts/billing-and-usage/copilot-usage-metrics/copilot-metrics
+[S20] Telemetry coverage, delayed finalization, and reconciliation:
+https://docs.github.com/en/copilot/reference/copilot-usage-metrics/reconciling-usage-metrics
+[S21] Enterprise Copilot seat assignments:
+https://docs.github.com/en/enterprise-cloud@latest/rest/copilot/copilot-user-management#list-all-copilot-seat-assignments-for-an-enterprise
+[S22] GitHub App enterprise metrics permissions:
+https://docs.github.com/en/enterprise-cloud@latest/rest/authentication/permissions-required-for-github-apps#enterprise-permissions-for-enterprise-copilot-metrics
+[S23] Daily team joins and suppression threshold:
+https://docs.github.com/en/copilot/reference/copilot-usage-metrics/team-level-metrics
+[S24] Activity fields and retention:
+https://docs.github.com/en/copilot/reference/metrics-data
