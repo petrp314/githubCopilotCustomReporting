@@ -1,0 +1,559 @@
+COPILOT USAGE REPORTING FOR GITHUB ENTERPRISE MANAGED USERS
+Requirements, feasibility investigation, and implementation plan
+
+Research date: 2026-10-08
+Status: Proposed requirements; enterprise access and stakeholder approval pending.
+Repository baseline: README only; no application, dependencies, or test/build setup.
+Scope of this deliverable: Documentation only, not an implemented dashboard.
+
+1. EXECUTIVE RECOMMENDATION
+
+Build a read-only reporting solution that combines Copilot adoption telemetry,
+license assignments, billing consumption, and GitHub cost centers. These are
+different datasets; no single endpoint supplies all requested statistics.
+
+A custom web application on GitHub Pages is feasible as a STATIC dashboard.
+Recommended first release: scheduled GitHub Actions collect REST API data,
+normalize it, and publish approved aggregate JSON alongside the private Pages
+site. The browser reads that JSON, not privileged enterprise APIs. Use a secure
+operator-import process for token-level AI usage reports where necessary.
+
+Use a backend API and enterprise SSO instead if different viewers require
+different cost-center permissions, named-user drilldowns, protected uploads, or
+large historical datasets. Pages can still host the frontend, but cannot host
+the backend or protect secrets embedded in its JavaScript.
+
+Important findings:
+- Actual token data IS documented: the AI usage report includes input, output,
+  cache_read, and cache_write by user/model. Do not incorrectly claim GitHub
+  exposes no tokens. This is a billing report, not the adoption metrics API. [S1]
+- The documented AI credit REST endpoint exposes credit/quantity and monetary
+  fields, but not those four token fields. A fully REST-only token dashboard
+  is therefore not established by the sources reviewed. [S2]
+- The documented report retrieval flow uses the billing UI and an emailed
+  download link. Token automation is a discovery gate, not a promised feature.
+  Support authorized report imports unless a supported API is verified. [S3]
+- AI credits, premium requests, model interactions, and model tokens are
+  separate units. They must never be relabeled or added together.
+- EMU Pages sites must be private, organization-owned project sites. This
+  repository can hold the requirements, but its personal-owner namespace is
+  not a suitable EMU Pages deployment location. Provisioning an enterprise
+  organization repository is future work requiring owner approval. [S10, S11]
+
+2. OUTCOMES, AUDIENCE, AND BOUNDARIES
+
+Business questions:
+- How many people are provisioned, licensed, and actually using Copilot?
+- How is observed adoption changing across time and organizational groups?
+- Which models are used, with what observed interaction and token volumes?
+- Which cost centers consume credits and incur Copilot charges?
+- Where is usage unallocated, telemetry incomplete, or licensing underused?
+
+Audience and default access:
+- Enterprise reporting administrators: configure sources and inspect quality.
+- Finance/billing analysts: enterprise and cost-center costs and reconciliation.
+- Cost-center managers: their authorized scope only, if a backend is selected.
+- General stakeholders: approved aggregate adoption and consumption only.
+Named-user information requires explicit approval; it is not the default view.
+
+MVP includes one EMU enterprise, read-only collection, historical snapshots,
+user-count definitions, model reporting, cost-center visualization, source
+freshness indicators, exports, and the documented token-report import path.
+Unsupported token reporting remains visibly unavailable, not silently omitted.
+
+Out of scope: changing licenses, cost centers, budgets, or IdP provisioning;
+capturing prompts, responses, source code, or private repository contents;
+individual productivity rankings; autonomous license removal; real-time billing;
+claiming invoice accuracy from telemetry; custom IDE instrumentation or scraping
+undocumented GitHub endpoints. Budget visualization is optional, not enforcement.
+
+3. VERIFIED SOURCES AND FEASIBILITY
+
+3.1 Billing consumption
+
+Use enterprise billing endpoints for enterprise-funded EMU Copilot usage.
+Personal user billing endpoints do not contain organization/enterprise-paid
+Copilot usage. Confirm the enterprise billing model and available SKUs first.
+
+Documented GET routes, relative to the configured GitHub API origin: [S2]
+- /enterprises/{enterprise}/settings/billing/ai_credit/usage
+  AI credit consumption, model/product/SKU, gross and discounted quantities,
+  net quantities, gross/discount/net amounts, and pricePerUnit/unitType.
+- /enterprises/{enterprise}/settings/billing/premium_request/usage
+  Premium-request billing data where applicable to the requested period.
+  Keep historical request-based and credit-based billing regimes separate.
+- /enterprises/{enterprise}/settings/billing/usage/summary
+  Enterprise usage summary; default covers all cost centers.
+- /enterprises/{enterprise}/settings/billing/usage
+  Summarized usage; IMPORTANT: its default covers usage WITHOUT a cost center,
+  unlike /usage/summary. It requires the enhanced billing platform.
+
+The first three endpoints document access to the past 24 months. Their optional
+date, model/product, organization/user, and cost-center filters differ; only
+send filters supported by the particular endpoint. On endpoints documenting it,
+cost_center_id=none selects unassigned usage. Avoid combining an enterprise
+total with its component cost-center/user queries and double counting.
+
+Model/user/cost-center query parameters are filters, not a promise that every
+response contains a complete user-by-model-by-day-by-cost-center breakdown.
+Inspect actual schemas and query scope, retain request dimensions, and estimate
+request volume before selecting the extraction grain. Confirm returned units
+rather than assuming every quantity is tokens or AI credits.
+
+Billing APIs document access for appropriate enterprise administrators, billing
+managers, organization owners, custom billing readers, and enterprise-installed
+GitHub Apps with enterprise billing read access. Role visibility can differ.
+Prove the chosen credential has full intended enterprise scope; a successful
+but restricted response must not be presented as an enterprise total. [S2, S4]
+
+3.2 Token detail and billing exports
+
+The AI usage report documents date/model/username aggregation and token fields
+input, output, cache_read, cache_write. Its maximum requested period is 31 days.
+The detailed metered usage report is also limited to 31 days; the summarized
+report supports up to one year per report. Detailed metered exports add username
+and workflow_path, and are not obtainable from the REST /usage endpoint. [S1]
+
+The published download process is: authorized operator requests the report in
+the billing UI, receives an email, and downloads using a link that expires after
+24 hours. Only one usage report per account can be requested at a time. [S1, S3]
+Do not confuse this link lifetime or report interval with historical retention.
+
+Required fallback: operator imports an authorized AI usage report into protected
+storage, or into an explicitly local-only browser session for an approved
+single-user analysis. A local-only import is not a persistent shared dashboard.
+For a shared Pages snapshot, ingest through the protected collection process,
+never through a public repository, issue, pull request, or artifact.
+Do not automate mailbox access, UI scraping, or reuse expiring download URLs
+as persistent data sources.
+
+Preserve report fields and validate the delivered schema before promising
+token-to-cost-center joins. A cost_center_name column is documented among report
+fields, but actual availability/granularity must be confirmed in the tenant's AI
+report. If absent, derive only a labeled analytical attribution from historical
+identity/cost-center membership; do not call it GitHub's billed allocation.
+
+Current billing documentation describes model-priced input/output/cached tokens
+converted into AI credits. Code completions and next edit suggestions are not
+billed in AI credits. Thus AI billing tokens are not necessarily all tokens used
+across every Copilot surface. Display their scope explicitly. [S7]
+Keep all four token categories separate until their overlap and total semantics
+are confirmed; do not add cached tokens to input tokens without evidence that
+the categories are disjoint. Never reverse-engineer tokens from credits or cost.
+
+3.3 Native cost centers
+
+Documented read-only routes: [S4]
+- /enterprises/{enterprise}/settings/billing/cost-centers
+- /enterprises/{enterprise}/settings/billing/cost-centers/{cost_center_id}
+
+Collect IDs, names, state, and resource assignments; include deleted centers
+needed for historical reporting. Paginate center details (per_page maximum 100,
+page and has_next_page). Do not assume the collection response replaces complete
+resource enumeration. Current documented limits are 1,000 active centers and
+25,000 resources per center. No write permissions are required by this project.
+
+Copilot allocation is not simply "user's current organization": [S5, S6]
+- Direct user assignment takes precedence.
+- Enterprise-team assignment can allocate users automatically. If multiple
+  assigned teams apply, GitHub documents precedence for the earliest-created team.
+- Otherwise use the organization charged for the Copilot license, not an arbitrary
+  organization membership. Multiple organizations must not duplicate a user.
+- Source billing allocation wins over a reconstructed analytical mapping.
+- Unallocated billing usage is "Enterprise Only"; keep it visible.
+- Changes affect future usage. Deletion must not erase historical attribution.
+- Cost centers do not apply to volume or subscription billing in the same way
+  as metered usage. Confirm applicability to the actual enterprise contract.
+
+Use cost-center IDs as keys. Names can change or be ambiguous in exported data.
+Keep unresolved identities/allocations distinct from genuinely unassigned usage.
+If exports identify only a name, retain it and join conservatively using known
+historical mappings; do not silently pick one of multiple matching centers.
+
+3.4 Enterprise identity
+
+EMU accounts are provisioned and authenticated through the enterprise IdP.
+Managed accounts use Copilot Business or Enterprise rather than personal
+Free/Pro subscriptions. EMU does not imply every provisioned user has a license
+or observable activity. [S8, S9]
+
+Use stable GitHub user IDs where available and maintain dated login aliases.
+Join login-only billing records through verified mappings; retain unresolved
+records rather than dropping them. Preserve deprovisioned users' authorized
+historical aggregates. Do not infer identity from email prefixes or EMU suffixes.
+IdP department/cost-center attributes are optional enrichment, not automatically
+the same as GitHub billing cost centers. No SCIM write credential is needed.
+
+4. DELIVERY ARCHITECTURE: CAN THIS RUN ON GITHUB PAGES?
+
+4.1 Option A: private Pages + scheduled collection (recommended conditional MVP)
+
+Data flow:
+GitHub reporting/billing APIs and approved report imports
+  -> scheduled trusted collector in GitHub Actions
+  -> protected historical store and normalization
+  -> privacy-approved aggregate snapshots
+  -> private GitHub Pages static application
+  -> authorized viewers.
+
+Pages serves static HTML, CSS, JavaScript, and JSON; it does not run a server,
+scheduled collector, database, or secret store. Actions provides collection and
+deployment separately. A normal framework-based frontend is possible, but no
+framework is selected or installed by this requirements exercise. [S10, S13]
+
+Conditions for choosing A:
+- All site viewers may access ALL data shipped with the site.
+- Daily/source-delayed reporting is acceptable.
+- Approved aggregates fit a static, partitioned dataset.
+- Operators accept token imports until supported API automation is proven.
+- Enterprise policies allow Pages, Actions, credentials, and the storage region.
+
+Use an organization-owned PRIVATE repository with explicitly granted readers,
+not an internal repository that may grant overly broad enterprise access.
+Private project Pages access follows repository read access; EMU requires private
+publication and prohibits personal-owner and organization-root Pages sites.
+Validate this in the actual enterprise, including a denied-access test. [S11]
+
+Every JSON file in a static deployment is downloadable by an authorized site
+reader regardless of hidden tabs or chart filters. Therefore, no per-cost-center
+or named-user authorization can be implemented by client-side filtering. Ship
+only a common approved aggregate dataset. If audiences differ, choose option B
+instead of shipping everything and hiding it in the UI.
+
+Keep raw billing/identity/token reports outside the site and Git history. Use
+protected durable storage with documented retention, not an ephemeral runner
+or Actions cache as the source of truth. Separate raw-data access from dashboard
+read access, including access to logs, artifacts, backups, and deployment bundles.
+
+Use a dedicated, read-only enterprise GitHub App where all required endpoints
+support it. Validate permissions per endpoint; if a required endpoint needs a
+different credential, document and approve that exception. Store app secrets or
+approved short-lived credential material in protected server-side facilities.
+The workflow's default GITHUB_TOKEN is repository-scoped and is NOT sufficient
+for enterprise billing and usage collection. [S12]
+
+Collection and deployment jobs must have separate minimum permissions. Secret
+collection must not execute untrusted pull-request code. Protect deployment
+branches/environments, review workflow changes, pin reviewed actions, and never
+log credentials, signed report URLs, or raw employee records. Publish only a
+verified output directory, not the entire workspace. No secrets may enter the
+frontend build variables, bundles, source maps, static JSON, or browser storage.
+
+Respect Pages' published 1 GB site limit and soft bandwidth limits; partition
+approved aggregates by period and publish bounded history. Keep the complete
+permitted history in the protected store. A scheduler is not a real-time service;
+display last successful collection and source coverage, not just build time.
+
+4.2 Option B: frontend + authenticated backend (recommended for scoped access)
+
+Data flow:
+Trusted scheduled collector/import service -> protected database/object storage
+  -> reporting API enforcing enterprise SSO and scope authorization
+  -> browser frontend (Pages or enterprise-approved web hosting).
+
+The backend owns GitHub credentials, import validation, historical queries,
+user-to-cost-center authorization, and audited exports. Viewers authenticate to
+the application; they do not need enterprise billing privileges or shared PATs.
+Validate authorization on every request, export, drilldown, and requested scope.
+Separate finance access, named-user access, and aggregate-manager access.
+
+Hosting the frontend and API on one approved origin may simplify authentication.
+If Pages and backend use different origins, explicitly design approved-origin
+CORS, authenticated sessions, CSRF defenses where applicable, token validation,
+and logout/revocation. Pages access alone does not authenticate the backend.
+Cloud choice, region, SSO integration, and storage remain approval decisions.
+
+4.3 Option C: Pages browser directly calls privileged GitHub REST APIs (reject)
+
+GitHub REST supports browser cross-origin requests, so CORS is not the main
+obstacle. API authorization and safe credential custody are. [S14]
+Pages login does not supply a billing API token. A shared PAT or app private key
+embedded in JavaScript, a URL, localStorage, or build output would expose its
+privileges to viewers. Asking every viewer for an administrator PAT is also
+not an acceptable production access model.
+
+A carefully designed per-user authorization flow can be technically possible,
+but it neither grants ordinary viewers enterprise billing permissions nor solves
+historical collection, token-export availability, or static row-level access.
+It is not the recommended production architecture.
+
+5. FUNCTIONAL REQUIREMENTS AND METRIC CONTRACT
+
+FR-01 Enterprise overview (MVP)
+Show distinct licensed users, source-defined active users, observed adoption,
+AI credit consumption, available token categories, and net Copilot usage charges.
+Every card includes unit, time window, source, coverage, and freshness.
+Enterprise-provisioned user count is shown only with an approved identity source.
+Display license charges separately where the billing source/contract provides
+them; never imply net AI usage charges include subscriptions, taxes, or all fees.
+
+FR-02 User populations (MVP)
+Keep provisioned, enabled, licensed, observed-active, and source-defined engaged
+users distinct. Do not derive license counts from users who generated usage.
+Deduplicate across organizations, models, surfaces, and days by stable identity.
+Seat snapshots are point-in-time; historical license counts require snapshots
+or an authoritative historical source, not today's roster projected backwards.
+
+Define period active users as the distinct users satisfying the selected source's
+activity definition within that window, not the sum of daily active counts.
+Proposed observed adoption rate: distinct licensed users with observed qualifying
+activity during the period divided by distinct users licensed at any point in
+that period. Join license and activity dates so only licensed activity qualifies.
+If the historical roster is incomplete, show coverage and do not claim that rate.
+Optional DAU/WAU/MAU use explicit calendar or rolling windows and the same source.
+Zero denominator means N/A. No-telemetry users are not proven non-users.
+
+FR-03 Model analysis (MVP)
+Show model identifiers as returned, trends, model-by-cost-center comparisons,
+observed users/interactions where telemetry permits, and billing consumption.
+Preserve unknown/automatic model values and versioned aliases; do not hardcode a
+model list or invent the resolved model behind an automatic selection.
+A user using two models counts once enterprise-wide but once under each model;
+model user counts are non-additive. Billing and telemetry model names may require
+an explicit maintained mapping and an unresolved bucket.
+
+FR-04 Tokens (MVP with source dependency)
+Show input, output, cache-read, and cache-write token trends by supported report
+dimensions. Provide a visible report-import status, range, source, and coverage.
+Unsupported periods/categories are unavailable, not zero. Clearly label partial
+Copilot surface coverage. If reports cannot be obtained, this requirement is
+blocked pending stakeholder acceptance; credits are not a token substitute.
+
+FR-05 Billing (MVP)
+Show gross usage, included/discounted usage, net billed usage, and source monetary
+amounts separately. Preserve decimal precision, unit, currency context, product,
+SKU, billing period, source rate, and source scope. Never sum different currencies.
+Do not recompute historical bills using current public list prices or model
+multipliers. Use billing reports for costs and telemetry for observed adoption.
+Cost per observed active user must state numerator/denominator coverage and
+exclude unavailable populations. Forecasts, if later added, are labeled estimates.
+
+FR-06 Cost-center dashboard (MVP)
+Provide ranked bars and a sortable accessible table for licensed/active users,
+credits, reported token categories, and costs by center; add time trends and a
+model-by-center heatmap where those joins are supported.
+Include Enterprise Only, unknown/unresolved, and deleted historical centers.
+Show attribution method: source-billed, historical analytical, or current-only.
+Reconcile additive allocated amounts plus Enterprise Only/unresolved amounts
+against the matching enterprise total. Do not sum distinct users across centers
+when a user moved during the reporting window.
+
+FR-07 Filters, exports, and comparison (MVP)
+Filter by UTC reporting dates, cost center, model, and supported source dimensions.
+Organization/team/feature filters appear only where supported; an organization
+filter must distinguish billed organization from activity organization.
+Include comparable-period trends, units, definitions, accessible tabular
+alternatives, empty/error states, and source metadata in CSV exports.
+Exports must enforce the same visibility as the dashboard and neutralize
+spreadsheet-formula injection. No publicly shareable raw-data URLs.
+
+FR-08 Operations and data quality (MVP)
+Show per-source latest available date, import/collection time, permission or
+policy failures, missing days, unresolved mappings, and reconciliation results.
+Retain the last good snapshot with a stale banner during outages. Distinguish
+valid zero usage from no data, suppressed data, disabled telemetry, denied
+access, and an unsupported report. Unknown/new fields or models must not silently
+corrupt totals. Incomplete collections must not replace a complete dataset.
+
+FR-09 Optional next phase
+Authorized named-user license utilization, budget/pool visualization, scheduled
+digest delivery, and finance-approved forecasts. Current GitHub budget semantics
+distinguish user caps, cost-center included pools, and metered-spend budgets;
+report them separately rather than inventing one universal budget percentage. [S15]
+Do not implement budget writes or automatic license reclamation.
+
+6. DATA, SECURITY, AND OPERATIONAL REQUIREMENTS
+
+Data model:
+- Enterprise and source capability registry, including API host/version.
+- Stable users with dated login aliases and permitted identity attributes.
+- Dated license assignments and memberships with source/effective dates.
+- Cost centers, names/states, and dated resource/attribution mappings.
+- Usage facts at the source grain, with report date, user/model/surface when
+  available, exact metric definition, schema version, and source provenance.
+- Billing facts at their own grain, including query scope, period, unit,
+  product/SKU/model, allocation, quantity, rate, and monetary amounts.
+- Token report facts with report identity, token categories, and coverage.
+- Ingestion ledger with hashes, source dates, timestamps, row counts, and status.
+
+Never join aggregated fact tables in a way that multiplies totals. Do not add a
+daily file and a rolling report containing the same dates. Reimports and retries
+must be idempotent at the report's natural grain. Corrected source periods replace
+or version the affected partition rather than being appended as new usage.
+Retain provenance sufficient to explain every displayed total.
+
+Snapshot changes prospectively. If only daily membership snapshots exist, do not
+claim exact intraday attribution; preserve source-billed values and label any
+analytical approximation. Do not rewrite historical costs when a center is renamed,
+deleted, or gains members. No synthetic backfill before source data is available.
+
+Security/privacy:
+- Data collection is read-only and enterprise-bound; fail closed on host/scope
+  misconfiguration. Configure github.com versus GHE.com endpoints explicitly.
+- TLS, encrypted protected storage, managed secrets, credential rotation,
+  least-privilege access, and audited administrative/import/export actions.
+- Minimize employee data. No prompts, completions, code, emails, or IdP attributes
+  unless necessary and approved. Restrict named-user data and apply approved
+  minimum-cohort suppression, including complementary aggregates that could
+  reconstruct suppressed groups.
+- Treat import files as untrusted: bounded size/rows, expected schema, safe
+  parsing, no execution, escaped rendering, and audited acceptance/rejection.
+- Authenticate/authorize downloads; never log signed URLs. Use configured
+  trusted report-download destinations and redirects; do not accept arbitrary
+  URL imports into a privileged collector.
+- Define lawful use, privacy notice, employee-reporting policy, retention,
+  deletion, backup expiry, and incident ownership before production.
+- Avoid third-party analytics and external scripts that receive enterprise data.
+
+Proposed operational targets, subject to stakeholder approval:
+- Collect daily; refresh available API-derived snapshots within 24 hours of
+  upstream publication, not within 24 hours of the original user interaction.
+- Show token imports' independent freshness; never imply they follow API cadence.
+- Alert after two missed expected collection cycles and preserve last good data.
+- Retain 13 months of approved daily aggregates; approve a shorter explicit
+  retention for raw/named-user data and enforce expiry in all copies.
+- Interactive overview/filter responses within 3 seconds at an agreed enterprise
+  scale. Confirm user count, centers, concurrency, and history before load testing.
+- Honor API pagination and rate-limit/Retry-After headers; use bounded retries
+  with backoff, daily partitions, checkpoints, and a source-specific replay window.
+- Verify recovery from backup and deterministic regeneration of published data.
+These are product targets, not promises made by GitHub's upstream services.
+
+7. ACCEPTANCE CRITERIA
+
+AC-01 Counts: a user licensed in two organizations and active on several days/
+models is one distinct enterprise user. A licensed user with no observed activity
+remains in the licensed denominator; the UI does not call them definitively idle.
+Historical adoption is unavailable when the requisite license history is missing.
+
+AC-02 Models: telemetry interactions, credits, premium requests, and tokens remain
+separate. An unrecognized model appears in results without breaking collection.
+Enterprise unique-user counts are not calculated by summing model user counts.
+
+AC-03 Tokens: an authorized representative AI usage report reproduces each token
+category exactly by date/model. Reimporting overlapping/corrected reports does not
+duplicate values. Missing token data displays unavailable. A token-to-center join
+with insufficient evidence is labeled analytical/unknown, never billed fact.
+
+AC-04 Cost centers: direct assignment, multiple enterprise teams, multiple license
+organizations, movement between centers, rename, deletion, and unassigned usage
+are covered by fixtures approved against billing behavior. Additive center totals
+reconcile to the same-source enterprise total with documented decimal precision.
+Distinct-user totals remain correct when users cross centers during a period.
+
+AC-05 Billing scope: /usage's unassigned-only default cannot be mistaken for the
+enterprise total. Filters preserve their query scope; summary/detail drilldowns
+are not added together. Invoice differences outside report scope are explained.
+
+AC-06 Resilience: pagination, expired report links, denied permissions, missing
+days, delayed telemetry, rate limiting, new schemas, duplicate records, and partial
+downloads produce actionable status without replacing valid data with zeros.
+No report is described as complete before all partitions/pages succeed.
+
+AC-07 Pages security: an authorized repository reader can load approved aggregates;
+an unauthorized enterprise member and an unauthenticated user cannot fetch either
+the site or its JSON. Downloading all site assets exposes no credentials, raw
+employee records, or data withheld by a visual filter. Repository/log/artifact
+permissions and retention are tested separately from Pages visibility.
+
+AC-08 Backend security, if option B: managers cannot access another center through
+modified query parameters, guessed URLs, API calls, or CSV exports. Disabling a
+viewer revokes access under the approved session policy. No GitHub collector
+credential is sent to the browser.
+
+AC-09 UX/operations: all charts have tables, filters remain keyboard-accessible,
+exports agree with displayed authorized results, units/UTC periods/freshness are
+visible, and collection recovery regenerates the same approved historical totals.
+
+8. PHASED IMPLEMENTATION PLAN AND APPROVAL GATES
+
+Phase 0: validate source access and choose the delivery boundary.
+- Confirm EMU enterprise/host, Copilot plans, billing regime, intended viewers,
+  data residency, Pages/Actions policy, and ownership.
+- Obtain least-privilege read access; inspect representative usage, seat, cost
+  center, billing, and AI token reports without putting them in this repository.
+- Record actual schemas, available periods, permissions, latency, units, supported
+  joins, and expected query volume in a capability matrix.
+- Compare native GitHub adoption/billing views with the requested cross-source
+  history and cost-center views; avoid rebuilding features without added value.
+- Decide option A only if a single common aggregate audience is sufficient;
+  otherwise choose option B. Approve token import and its operating owner.
+Exit: demonstrable data for each core metric, or explicit blocked requirements
+and stakeholder-approved fallback; approved architecture and privacy boundary.
+
+Phase 1: reliable read-only collection and historical storage.
+- Establish protected credentials, source adapters, ingestion ledger, dated
+  identities/licenses/cost centers, secure imports, and replay/reconciliation.
+- Validate definitions and source coverage with finance and enterprise owners.
+Exit: reproducible representative-period data, idempotent refresh, and documented
+unknown/unassigned populations without invented tokens or historical assignments.
+
+Phase 2: MVP dashboard.
+- Deliver enterprise overview, users/adoption, model trends, token categories,
+  cost-center charts/tables, filters, exports, and freshness/quality indicators.
+- Publish only approved aggregates to private Pages, or enforce backend scopes.
+Exit: FR-01 through FR-08 and applicable acceptance criteria pass with the pilot
+enterprise; token source gaps are visible and explicitly accepted if unresolved.
+
+Phase 3: production readiness.
+- Validate permissions, secrets/artifacts, privacy/cohort rules, source failures,
+  performance, retention/deletion, monitoring, backup recovery, and operator
+  handover. Assign source-change and schema-review ownership.
+Exit: security/finance/product approval and an operational runbook with no
+unresolved critical data-exposure or financial-reconciliation issue.
+
+Phase 4: optional expansion.
+- Add approved scoped drilldowns, budgets, forecasts, and digests only after the
+  corresponding sources, authorization, and unit semantics are verified.
+- Replace token imports only when a supported token-report API is demonstrated.
+
+Decisions needed before implementation:
+1. Enterprise slug/API host, organization deployment location, and owning team?
+2. Aggregate shared audience or cost-center-specific/individual permissions?
+3. Copilot plans, billing contract, and periods spanning differing billing regimes?
+4. Is an operator-imported AI token report acceptable, or is full automation a
+   launch requirement that must wait for verified supported token access?
+5. Which identity source defines provisioned users and historical license scope?
+6. Are GitHub billing cost centers authoritative, or is a separate finance/IdP
+   allocation view also required? Who approves mapping discrepancies?
+7. Approved history, raw-data retention, cohort threshold, exports, and region?
+8. Expected user/center scale, budget, hosting constraints, and operational owners?
+
+9. OFFICIAL SOURCES
+
+Retrieved during this investigation on 2026-10-08. GitHub's "latest" documentation
+is mutable; validate schemas and tenant availability again during Phase 0.
+No live enterprise payload, tenant entitlement, or credential was available for
+this research. Documentation-backed availability is not proof of tenant access.
+
+[S1] Billing reports reference (token columns, grains, report periods):
+https://docs.github.com/en/enterprise-cloud@latest/billing/reference/billing-reports
+[S2] Billing usage REST API (routes, fields, permissions, defaults, retention):
+https://docs.github.com/en/enterprise-cloud@latest/rest/billing/usage
+[S3] Viewing usage and downloading emailed reports:
+https://docs.github.com/en/enterprise-cloud@latest/billing/how-tos/products/view-productlicense-use
+[S4] Cost centers REST API:
+https://docs.github.com/en/enterprise-cloud@latest/rest/billing/cost-centers
+[S5] Cost center allocation and historical changes:
+https://docs.github.com/en/enterprise-cloud@latest/billing/reference/cost-center-allocation
+[S6] Cost center concepts and limits:
+https://docs.github.com/en/enterprise-cloud@latest/billing/concepts/cost-centers
+[S7] Copilot usage-based billing for organizations and enterprises:
+https://docs.github.com/en/enterprise-cloud@latest/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing
+[S8] Enterprise Managed Users:
+https://docs.github.com/en/enterprise-cloud@latest/admin/concepts/identity-and-access-management/enterprise-managed-users
+[S9] Managed account abilities and restrictions:
+https://docs.github.com/en/enterprise-cloud@latest/admin/managing-iam/understanding-iam-for-enterprises/abilities-and-restrictions-of-managed-user-accounts
+[S10] GitHub Pages static hosting:
+https://docs.github.com/en/enterprise-cloud@latest/pages/getting-started-with-github-pages/what-is-github-pages
+[S11] Pages private access and EMU limitations:
+https://docs.github.com/en/enterprise-cloud@latest/pages/getting-started-with-github-pages/changing-the-visibility-of-your-github-pages-site
+https://docs.github.com/en/enterprise-cloud@latest/pages/getting-started-with-github-pages/github-pages-limits
+[S12] Repository-scoped GITHUB_TOKEN:
+https://docs.github.com/en/actions/concepts/security/github_token
+[S13] Actions-based Pages deployment:
+https://docs.github.com/en/enterprise-cloud@latest/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages
+[S14] REST cross-origin requests:
+https://docs.github.com/en/rest/using-the-rest-api/using-cors-and-jsonp-to-make-cross-origin-requests
+[S15] Copilot budget and included-pool semantics:
+https://docs.github.com/en/enterprise-cloud@latest/copilot/concepts/billing-and-usage/organizations-and-enterprises/budgets
