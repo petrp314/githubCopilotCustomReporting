@@ -1,0 +1,131 @@
+name: Private reporting (opt-in)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 6 * * *"
+
+permissions: {}
+
+concurrency:
+  group: private-reporting
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    if: >-
+      vars.REPORTING_ENABLED == 'true' &&
+      vars.REPORTING_ENCRYPTION_APPROVED == 'true' &&
+      vars.REPORTING_APPROVED_ORGANIZATION != '' &&
+      github.repository_owner == vars.REPORTING_APPROVED_ORGANIZATION &&
+      github.event.repository.owner.type == 'Organization' &&
+      github.event.repository.private == true &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: [self-hosted, Linux, copilot-reporting]
+    environment: reporting-collection
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pages: read
+    env:
+      REPORTING_ENABLED: ${{ vars.REPORTING_ENABLED }}
+      REPORTING_APPROVED_ORGANIZATION: ${{ vars.REPORTING_APPROVED_ORGANIZATION }}
+      REPORTING_ENCRYPTION_APPROVED: ${{ vars.REPORTING_ENCRYPTION_APPROVED }}
+      REPORTING_CONFIG_PATH: ${{ vars.REPORTING_CONFIG_PATH }}
+      REPORTING_STORE_PATH: ${{ vars.REPORTING_STORE_PATH }}
+      REPORTING_STORAGE_MOUNT: ${{ vars.REPORTING_STORAGE_MOUNT }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify private destination and protected approved configuration
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python -c 'import sys; assert sys.version_info >= (3, 12)'
+          python -m copilot_reporting.deployment \
+            --config "$REPORTING_CONFIG_PATH" --store "$REPORTING_STORE_PATH" \
+            --storage-mount "$REPORTING_STORAGE_MOUNT"
+      - name: Enforce local retention before collection
+        run: |
+          python -m copilot_reporting expire \
+            --config "$REPORTING_CONFIG_PATH" --store "$REPORTING_STORE_PATH"
+      - name: Collect into encrypted persistent storage
+        env:
+          COPILOT_REPORTING_TOKEN: ${{ secrets.COPILOT_REPORTING_TOKEN }}
+          COPILOT_SEATS_TOKEN: ${{ secrets.COPILOT_SEATS_TOKEN }}
+        run: |
+          set +e
+          python -m copilot_reporting collect \
+            --config "$REPORTING_CONFIG_PATH" --store "$REPORTING_STORE_PATH"
+          result=$?
+          set -e
+          if [ "$result" -eq 2 ]; then
+            echo "::warning::Some sources are unavailable; last good partitions and status banners retained."
+          elif [ "$result" -ne 0 ]; then
+            exit "$result"
+          fi
+      - name: Publish approved aggregates only
+        run: |
+          python -m copilot_reporting publish \
+            --config "$REPORTING_CONFIG_PATH" --store "$REPORTING_STORE_PATH" --output dist
+      - name: Recheck private destination and allowlisted artifact
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python -m copilot_reporting.deployment \
+            --config "$REPORTING_CONFIG_PATH" --store "$REPORTING_STORE_PATH" \
+            --storage-mount "$REPORTING_STORAGE_MOUNT" --output dist
+      - name: Upload only the approved static site
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: dist
+          retention-days: 1
+      - name: Remove the self-hosted publication copy
+        if: always()
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+          destination = Path("dist")
+          if destination.is_symlink():
+              destination.unlink()
+          elif destination.exists():
+              shutil.rmtree(destination)
+          PY
+
+  deploy:
+    needs: collect
+    if: >-
+      vars.REPORTING_ENABLED == 'true' &&
+      vars.REPORTING_APPROVED_ORGANIZATION != '' &&
+      github.repository_owner == vars.REPORTING_APPROVED_ORGANIZATION &&
+      github.event.repository.owner.type == 'Organization' &&
+      github.event.repository.private == true &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fail closed if destination privacy changed
+        env:
+          REPORTING_ENABLED: ${{ vars.REPORTING_ENABLED }}
+          REPORTING_APPROVED_ORGANIZATION: ${{ vars.REPORTING_APPROVED_ORGANIZATION }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python -m copilot_reporting.deployment
+      - name: Deploy approved private site
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

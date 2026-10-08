@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <meta name="referrer" content="no-referrer">
+  <title>Copilot enterprise reporting</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to report</a>
+  <header class="site-header">
+    <div class="container">
+      <p class="eyebrow">GitHub Copilot · Enterprise reporting</p>
+      <h1>Usage, adoption &amp; consumption</h1>
+      <p>Approved aggregates. Separate sources. Clear coverage.</p>
+      <p id="demo-label" class="badge" hidden>DEMO · Synthetic data, not enterprise activity</p>
+      <p id="report-period">Reporting period: Unavailable</p>
+    </div>
+  </header>
+  <main id="main" class="container" tabindex="-1">
+    <p id="load-status" role="status">Loading the published aggregate report…</p>
+    <p id="stale-banner" class="notice warning" role="alert" hidden></p>
+    <noscript><p class="notice warning">JavaScript is required to load the aggregate report. No data is sent to external services.</p></noscript>
+    <div id="dashboard" hidden>
+      <section class="panel" aria-labelledby="filter-heading">
+        <h2 id="filter-heading">Explore the reporting period</h2>
+        <form id="filters" class="filters">
+          <div><label for="start-date">From (UTC, inclusive)</label><input id="start-date" name="start" type="date"></div>
+          <div><label for="end-date">To (UTC, inclusive)</label><input id="end-date" name="end" type="date"></div>
+          <div><label for="model-filter">Model</label><select id="model-filter" name="model"><option value="">All models</option></select></div>
+          <div><label for="center-filter">Cost center</label><select id="center-filter" name="center"><option value="">All cost centers</option></select></div>
+          <button type="reset" class="secondary">Reset filters</button>
+          <button id="export-button" type="button">Export visible tables (CSV)</button>
+        </form>
+        <p id="filter-status" role="status" class="muted"></p>
+        <p class="fine-print">Filters apply only where the source supports that dimension. Period distinct counts cannot be recomputed from daily or model aggregates. No organization, team, or identity filters are inferred.</p>
+      </section>
+      <section aria-labelledby="overview-heading">
+        <h2 id="overview-heading">Enterprise overview</h2>
+        <p id="overview-note" class="muted"></p>
+        <div id="overview" class="cards"></div>
+        <p class="fine-print">Provisioned, enabled, and engaged populations: Unavailable without an approved source. Licensed and observed-active users are different populations; missing telemetry does not prove inactivity. Adoption is published only when license-history coverage supports it.</p>
+      </section>
+      <section class="panel" aria-labelledby="daily-heading">
+        <h2 id="daily-heading">Daily adoption &amp; surface telemetry</h2>
+        <p class="muted">Daily active users are not additive across days. Seat counts are dated snapshots, not a historical roster inferred from today's licenses. CLI and app prompt/output tokens have partial surface coverage and may overlap billing-report tokens; they are never added together.</p>
+        <p class="fine-print">Comparable prior-period baseline: Unavailable. This report does not publish a matched baseline; daily trends are not distinct-user period comparisons.</p>
+        <div id="daily-table"></div>
+      </section>
+      <section class="panel" aria-labelledby="model-heading">
+        <h2 id="model-heading">Model activity</h2>
+        <p class="muted">Source model identifiers are preserved, including automatic or unresolved values. Model active users are non-additive; one person may appear in several models. Telemetry cannot be attributed to a cost center from this report.</p>
+        <div id="model-table"></div>
+      </section>
+      <section class="panel" aria-labelledby="billing-heading">
+        <h2 id="billing-heading">Billing consumption &amp; model-by-center comparison</h2>
+        <p class="muted">Gross, included/discounted, and net values are separate. Quantities retain their source units; currencies, products, SKUs, attribution methods, and sources are never combined. Net usage amounts do not imply subscription charges, taxes, or an invoice total.</p>
+        <p class="fine-print">Bars rank net consumption within matching source / unit / currency / product / SKU / attribution groups only. The sortable table is the textual equivalent. Center-level licensed/active users are Unavailable: this source has no approved identity join. Subscriptions and cost-per-active-user are not derived.</p>
+        <div id="billing-summary"></div>
+        <h3>Daily billing trend</h3>
+        <div id="billing-trend"></div>
+      </section>
+      <section class="panel" aria-labelledby="token-heading">
+        <h2 id="token-heading">Billing-report tokens</h2>
+        <p class="muted">Input, output, cache-read, and cache-write remain four distinct categories. No combined token total is calculated. These are not AI credits, premium requests, interactions, or general IDE token coverage.</p>
+        <p id="token-coverage" class="fine-print"></p>
+        <h3>Model-by-center categories</h3>
+        <div id="token-summary"></div>
+        <h3>Daily token trend</h3>
+        <div id="token-trend"></div>
+      </section>
+      <section class="panel" aria-labelledby="quality-heading">
+        <h2 id="quality-heading">Sources, freshness &amp; data quality</h2>
+        <p id="collection-status" class="muted"></p>
+        <div id="sources-table"></div>
+        <h3>Quality and reconciliation notes</h3>
+        <ul id="quality-list"></ul>
+        <h3>Privacy &amp; interpretation</h3>
+        <p id="privacy-notice"></p>
+        <p class="fine-print">Unavailable is not zero. Empty or suppressed cohorts cannot be reconstructed here. Current-only attribution is not historical attribution; source model names are not automatically joined across datasets. This static site has no named-user drilldown, upload, credential entry, or browser storage.</p>
+      </section>
+    </div>
+  </main>
+  <footer class="container">
+    <p>Read-only reporting · UTC dates · Aggregate data only · No external analytics</p>
+  </footer>
+</body>
+</html>
