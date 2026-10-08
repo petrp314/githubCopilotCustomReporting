@@ -1,0 +1,18 @@
+{
+  "name": "githubcopilotcustomreporting",
+  "version": "1.0.0",
+  "description": "Private aggregate-only GitHub Copilot reporting",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "python -m unittest discover -s tests -v && node --test tests/dashboard.test.js",
+    "build": "python -m copilot_reporting demo --output dist",
+    "preview": "python -m http.server 8000 --bind 127.0.0.1 --directory dist"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/petrp314/githubCopilotCustomReporting"
+  },
+  "keywords": [],
+  "author": ""
+}
