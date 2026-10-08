@@ -29,6 +29,14 @@ tests. The build is `python -m copilot_reporting demo --output dist`; preview is
 explicitly synthetic. CI tests/builds it on hosted runners and never deploys or
 uploads it. Never serve live data with this unauthenticated preview server.
 
+The dashboard provides sortable accessible tables, billing rank bars,
+date/model/cost-center filters, and safe filtered-table CSV exports. Daily and
+summary CSV datasets are labeled separately: **do not add them together**.
+Overview unique-user counts/adoption become N/A under narrowed filters, and
+telemetry is hidden for unsupported model/center filters rather than inventing
+breakdowns. Prior-period comparison is explicitly unavailable because no
+comparison baseline is published.
+
 ## Data and access boundary
 
 ```text
@@ -42,7 +50,9 @@ database stay **outside the repository and publication directory**. The browser
 does not call privileged GitHub APIs, accept credentials, or provide an upload
 service. Collection snapshots and corrected source periods are replaced
 idempotently; unsuccessful sources retain last good partitions with status and
-coverage warnings.
+coverage warnings. Protected storage is forbidden inside **any Git working
+tree**, and each store is bound to both its enterprise and API origin; do not
+reuse a database for a different tenant or host.
 
 **Every site reader can download every published aggregate**, including JSON
 hidden by a filter. Pages is not row-level authorization. Different manager or
@@ -71,6 +81,11 @@ Review and approve:
 
 - The enterprise slug, API version, and API origin: `https://api.github.com` or
   `https://api.<subdomain>.ghe.com`. Collection and deployment origins must agree.
+- `enterprise_scope_verified` defaults to `false`. Collection, token import, and
+  publication fail closed until an operator proves the credentials' full intended
+  enterprise visibility and sets it to `true` in the protected configuration.
+  A successful API response alone is insufficient evidence; expiry remains
+  available without this gate so privacy cleanup is not blocked.
 - `download_hosts`: explicit, exact trusted HTTPS report-download destinations
   verified for the tenant. Empty means no downloads are allowed. Do not broadly
   trust arbitrary storage hosts, copy signed URLs into configuration, or log them.
@@ -83,8 +98,12 @@ Review and approve:
   breakdowns have separate approval flags. Suppression does not replace a
   privacy review of complementary groups, billing amounts, and repeated releases.
 - Raw retention (default **35 days**), aggregate retention (default **395 days**),
-  and replay window (default **7 days**). Dates are UTC; absent explicit dates,
-  collection/publication uses the replay window ending yesterday.
+  replay window (default **7 days**), and `source_lag_days` (default **3 days**).
+  Dates are UTC; absent explicit dates, collection/publication ends at UTC today
+  minus `source_lag_days` and covers `replay_days` (seven days by default)—not the
+  whole retained history. The three-day default avoids demanding daily partitions
+  before normal telemetry publication. The workflow passes no explicit dates,
+  so collection and publication use the same configured defaults.
 
 ### Credentials and endpoint permissions
 
@@ -127,6 +146,31 @@ or failed, after persisting source status and retaining last good partitions;
 this is not a complete-success result. Other validation/access failures return
 1. Inspect dashboard source freshness, missing dates, and reconciliation rather
 than treating an updated build timestamp as fresh data.
+
+Default rolling publication also protects against outages across changing date
+windows: if a previously complete source gains missing days in the next
+same-length window, publication can retain the prior approved archived window
+with refresh-failed/stale status. This fallback requires the **same privacy-policy
+fingerprint**. The retained window and original `generated_at` remain visible;
+rebuilding the site does not make old data appear freshly generated. Explicit
+`--start`/`--end` instead respects the requested range rather than silently
+substituting an earlier window.
+
+To restore an **exact previously published and approved window**, including
+after its raw records expire:
+
+```sh
+python -m copilot_reporting publish --config "$CONFIG" --store "$STORE" \
+  --archived --start 2026-10-01 --end 2026-10-07 --output dist
+```
+
+The requested archive must still exist under aggregate retention. Restoration
+requires the current publication-policy fingerprint to match the archived
+policy exactly. A stricter or otherwise different policy does **not** authorize
+silently republishing old aggregates: obtain approval and regenerate under the
+current policy. Without the necessary retained source records, regeneration may
+be unavailable; do not bypass the mismatch check. Restoration does not refresh
+the archive's underlying source data.
 
 Token fallback imports are bounded UTF-8 CSV with exact, case-sensitive headers:
 `day` (`date` is the only alias), `model`, and at least one of `input`, `output`,
@@ -204,19 +248,24 @@ between checks and deployment remain an organizational policy/monitoring concern
 | Usage, licenses, models | Daily source snapshots, stable-user deduplication, observed metrics, unknown/unavailable states | Tenant permissions/schemas, representative reconciliation, sufficient historical roster coverage |
 | Billing and cost centers | Source-billed amounts and units, decimals, unallocated/unresolved groups and reconciliation | Currency/scope confirmation; finance approval of allocations and report totals |
 | Tokens | Asynchronous export collection and strict local CSV fallback; categories kept separate from credits and CLI/app telemetry | Tenant entitlement, actual export columns, representative token/category reconciliation |
-| Center user counts | Not claimed from current membership | Historical allocation evidence; billed center amounts do **not** establish licensed/active populations |
+| Center user counts | Intentionally shown as **unavailable**; usage is not mapped to centers from current membership | Historical allocation evidence; billed center amounts do **not** establish licensed/active populations |
 | Static privacy | Common-audience approval, cohort suppression, aggregate-only output, guarded private Pages workflow | Tenant gate **not satisfied**; employee/privacy review, artifact/log access approval and denied-access testing |
 | Historical operation | SQLite snapshots, ledger, last-good source partitions and approved aggregate archives | Backup restore, retention across all copies, scheduler alerting, scale and recovery acceptance |
 | Scoped backend access | **Not implemented** | Separate backend/SSO architecture if audiences differ |
 
-The default seven-day replay is not an automatic 13-month backfill. Approved
-aggregate archives remain in SQLite for 395 days, but raw records expire after
-35 days by default. **Arbitrary rolling unique-user recomputation after raw
+The default seven-day replay/publication window is neither an automatic 13-month
+backfill nor publication of all retained history. Approved aggregate archives
+remain in SQLite for 395 days and can restore exact approved windows with
+`publish --archived`, but raw records expire after 35 days by default.
+**Arbitrary rolling unique-user recomputation after raw
 expiry is unavailable**; archived aggregates cannot safely be summed to recover
 distinct populations. Current seat and center snapshots do not prove historical
 license or allocation membership. No provisioned-user/IdP source is implemented.
 AI credits, premium requests, interactions, billing tokens, and surface telemetry
-tokens are different measures, not interchangeable totals.
+tokens are different measures, not interchangeable totals. Subscription totals
+and cost-per-active-user are not inferred. Freshness uses source collection
+timestamps, including retained data from unavailable sources; an updated site
+does not make those sources current.
 
 ## Operational acceptance checklist
 
@@ -232,7 +281,9 @@ tokens are different measures, not interchangeable totals.
   permissions. Back up SQLite consistently (SQLite backup API or a quiesced
   store), along with approved state/configuration; encrypt and restrict backups,
   and rehearse restoration and deterministic regeneration.
-- Run expiry routinely. Include raw imports/checkpoints, old publication copies,
+- Run expiry routinely: the CLI applies raw/aggregate retention to SQLite data
+  and raw retention to `store/exports/*.json` checkpoints. Separately
+  remove expired backups and operator import files. Include old publication copies,
   replaced Pages releases, logs, artifacts, backups, and deleted-user obligations
   in the approved deletion policy. SQLite expiry alone cannot erase external
   copies or guarantee physical erasure on underlying storage.

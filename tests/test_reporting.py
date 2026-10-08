@@ -5,7 +5,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 
-from copilot_reporting.aggregate import build_report, reconcile
+from copilot_reporting.aggregate import build_report, reconcile, retain_last_good
 from copilot_reporting.demo import APPROVAL, END, START, snapshots
 from copilot_reporting.domain import number, total
 from copilot_reporting.store import Store
@@ -136,6 +136,8 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(self.store.archived_aggregate(START, END)["overview"]["licensed_users"]["value"], 12)
         with self.assertRaises(ValueError):
             Store(self.directory.name, "other-enterprise")
+        with self.assertRaises(ValueError):
+            Store(self.directory.name, "synthetic", "https://api.other.ghe.com")
 
     def test_null_assignee_makes_roster_incomplete(self):
         change = copy.deepcopy(self.data[0])
@@ -172,6 +174,34 @@ class ReportingTests(unittest.TestCase):
             row["user_login"] = f"later-login-{row['user_id']}"
         self.store.ingest(later)
         self.assertEqual(self.report()["tokens"], [])
+
+    def test_missing_rolling_partition_retains_last_good_window(self):
+        previous = self.report()
+        self.store.save_aggregate(previous)
+        incomplete = build_report(self.store, "2026-10-02", "2026-10-04", APPROVAL)
+        retained = retain_last_good(incomplete, self.store.latest_aggregate())
+        self.assertEqual(retained["period"], previous["period"])
+        self.assertEqual(retained["overview"]["observed_active_users"]["value"], 12)
+        self.assertEqual(retained["generated_at"], previous["generated_at"])
+        self.assertTrue(any(source["status"] == "error" for source in retained["sources"]))
+
+    def test_stale_archive_with_changed_policy_never_republished(self):
+        previous = self.report()
+        settings = {**APPROVAL, "minimum_cohort": 10}
+        incomplete = build_report(self.store, "2026-10-02", "2026-10-04", settings)
+        self.assertEqual(retain_last_good(incomplete, previous), incomplete)
+
+    def test_source_diagnostics_do_not_echo_untrusted_error_text(self):
+        snapshot = copy.deepcopy(self.data[0])
+        snapshot["sources"]["tokens"] = {
+            "status": "unavailable", "error_code": "access_denied",
+            "reason": "PRIVATE-SIGNED-URL",
+        }
+        self.store.ingest(snapshot)
+        report = self.report()
+        source = next(row for row in report["sources"] if row["id"] == "tokens")
+        self.assertIn("Access denied", source["message"])
+        self.assertNotIn("PRIVATE-SIGNED-URL", json.dumps(report))
 
 
 if __name__ == "__main__":

@@ -355,7 +355,7 @@ class CollectorTests(LocalFixture):
         self.collector.http.download = Mock(side_effect=AssertionError("Unexpected download"))
 
     def empty_other_sources(self):
-        for method in ("_seats", "_cost_centers", "_usage", "_billing"):
+        for method in ("_seats", "_cost_centers", "_usage", "_billing", "_billing_centers"):
             setattr(self.collector, method, Mock(return_value=[]))
 
     def test_full_collection_routes_pagination_and_all_report_shards(self):
@@ -400,8 +400,14 @@ class CollectorTests(LocalFixture):
                 return response({"report_day": DAY,
                                  "download_links": ["https://" + HOST + "/enterprise"]})
             if path.endswith("/ai_credit/usage"):
-                self.assertEqual(query, {"year": 2026, "month": 10, "day": 1})
-                return response({"enterprise": "acme", "timePeriod": query,
+                self.assertEqual(
+                    {key: value for key, value in query.items() if key != "cost_center_id"},
+                    {"year": 2026, "month": 10, "day": 1},
+                )
+                self.assertLessEqual(set(query), {"year", "month", "day", "cost_center_id"})
+                return response({"enterprise": "acme", "timePeriod": {
+                    "year": 2026, "month": 10, "day": 1,
+                },
                                  "usageItems": [{"unitType": "AI credits", "netAmount": "0.12"}]})
             if path.endswith("/reports") and method == "POST":
                 self.assertEqual(payload, {
@@ -429,6 +435,19 @@ class CollectorTests(LocalFixture):
         self.assertEqual(len(sources["tokens"]["data"]), 2)
         self.assertEqual(sources["billing"]["data"][0]["day"], DAY)
         self.assertEqual(sources["billing"]["data"][0]["netAmount"], "0.12")
+        self.assertEqual(len(sources["billing"]["data"]), 1)
+        self.assertEqual(sources["billing"]["data"][0]["scope"], "enterprise")
+        self.assertEqual(sources["billing"]["data"][0]["cost_center_id"], "__enterprise__")
+        self.assertIsNone(sources["billing"]["data"][0]["currency"])
+        self.assertEqual(sources["billing_centers"]["scope"], "cost_center")
+        self.assertEqual(len(sources["billing_centers"]["data"]), 3)
+        self.assertEqual(
+            {row["cost_center_id"] for row in sources["billing_centers"]["data"]},
+            {"active", "deleted", "enterprise-only"},
+        )
+        self.assertTrue(all(
+            row["scope"] == "cost_center" for row in sources["billing_centers"]["data"]
+        ))
         self.assertTrue(all(call[0].startswith("/enterprises/acme/") for call in api_calls))
         self.assertEqual(sum(call[2] == "POST" for call in api_calls), 1)
         self.assertTrue(snapshot["collected_at"].endswith("Z"))
@@ -525,7 +544,43 @@ class CollectorTests(LocalFixture):
         for name in ("usage", "enterprise_usage"):
             self.assertEqual(snapshot["sources"][name]["missing_days"], [DAY])
             self.assertEqual(snapshot["sources"][name]["status"], "unavailable")
+            self.assertEqual(snapshot["sources"][name]["error_code"], "missing_days")
             self.assertNotIn("data", snapshot["sources"][name])
+
+    def test_source_error_codes_are_static_and_match_store_diagnostics(self):
+        self.empty_other_sources()
+        cases = [
+            (SourceError("Source access is unavailable.", status=401, unavailable=True),
+             "access_denied", "unavailable"),
+            (SourceError("Source access is unavailable.", status=403, unavailable=True),
+             "access_denied", "unavailable"),
+            (SourceError("Source access is unavailable.", status=404, unavailable=True),
+             "unsupported_or_missing", "unavailable"),
+            (SourceError("Source request failed.", status=429), "rate_limited", "error"),
+            (SourceError("Source request failed.", status=500), "collection_failed", "error"),
+            (SourceError("Source request failed."), "collection_failed", "error"),
+            (UnsupportedTokenSchema("Report has no usable token columns."),
+             "unsupported_schema", "unavailable"),
+            (TokenImportError("Malformed report."), "invalid_import", "error"),
+            (ValueError("Never expose this value."), "collection_failed", "error"),
+        ]
+        for error, code, status in cases:
+            with self.subTest(code=code, status=getattr(error, "status", None)):
+                self.collector._tokens = Mock(side_effect=error)
+                source = self.collector.collect(DAY, DAY)["sources"]["tokens"]
+                self.assertEqual(source["error_code"], code)
+                self.assertEqual(source["status"], status)
+                self.assertNotIn("data", source)
+                self.assertNotIn("Never expose", source["reason"])
+
+    def test_valid_empty_source_has_no_error_diagnostic(self):
+        self.empty_other_sources()
+        self.collector._tokens = Mock(return_value=[])
+        source = self.collector.collect(DAY, DAY)["sources"]["tokens"]
+        self.assertEqual(source["status"], "ok")
+        self.assertEqual(source["data"], [])
+        self.assertNotIn("error_code", source)
+        self.assertNotIn("reason", source)
 
     def test_usage_duplicate_or_wrong_day_or_invalid_ndjson_fails(self):
         for content in (
@@ -563,6 +618,155 @@ class CollectorTests(LocalFixture):
         with self.assertRaises(SourceError):
             self.collector._billing(date.fromisoformat(DAY), date.fromisoformat(DAY))
 
+    def test_billing_injects_requested_dimensions_without_losing_decimal_precision(self):
+        self.collector.billing_currency = "EUR"
+        self.collector.http.api.side_effect = [Response(
+            b'{"enterprise":"acme","timePeriod":{"year":2026,"month":10,"day":1},'
+            b'"costCenter":{"id":"center","name":"Renamed center"},'
+            b'"usageItems":[{"model":"m","unitType":"AI credits",'
+            b'"pricePerUnit":0.000000000000000019,"netAmount":0.1234567890123456789}]}',
+            {}, 200,
+        )]
+        row = self.collector._billing(
+            date.fromisoformat(DAY), date.fromisoformat(DAY), "center", "Older name"
+        )[0]
+        self.assertEqual(row["day"], DAY)
+        self.assertEqual(row["scope"], "cost_center")
+        self.assertEqual(row["cost_center_id"], "center")
+        self.assertEqual(row["cost_center_name"], "Renamed center")
+        self.assertEqual(row["currency"], "EUR")
+        self.assertEqual(row["unitType"], "AI credits")
+        self.assertEqual(row["netAmount"], "0.1234567890123456789")
+        self.assertEqual(row["pricePerUnit"], "0.000000000000000019")
+        self.assertEqual(self.collector.http.api.call_args.kwargs["query"], {
+            "year": 2026, "month": 10, "day": 1, "cost_center_id": "center",
+        })
+
+    def test_billing_rejects_unexpected_or_mismatched_top_level_cost_center(self):
+        for requested in (None, "expected-center", "none"):
+            self.collector.http.api.side_effect = [response({
+                "enterprise": "acme", "timePeriod": {"year": 2026, "month": 10, "day": 1},
+                "costCenter": {"id": "another-center", "name": "Other"},
+                "usageItems": [],
+            })]
+            with self.subTest(requested=requested), self.assertRaises(SourceError):
+                self.collector._billing(
+                    date.fromisoformat(DAY), date.fromisoformat(DAY), requested
+                )
+
+    def test_premium_request_selection_preserves_units_and_leaves_currency_unknown(self):
+        collector = Collector({
+            "enterprise": "acme", "billing_report": "premium_request", "billing_currency": "Unknown",
+        }, self.directory)
+        collector.http.api = Mock(return_value=response({
+            "enterprise": "acme", "timePeriod": {"year": 2026, "month": 10, "day": 1},
+            "usageItems": [{"unitType": "requests", "grossQuantity": "2", "netAmount": "0.5"}],
+        }))
+        row = collector._billing(date.fromisoformat(DAY), date.fromisoformat(DAY))[0]
+        self.assertTrue(collector.http.api.call_args.args[0].endswith("/premium_request/usage"))
+        self.assertEqual(row["report_type"], "premium_request")
+        self.assertEqual(row["unitType"], "requests")
+        self.assertIsNone(row["currency"])
+
+    def test_failed_billing_day_is_atomic_but_other_sources_succeed(self):
+        self.empty_other_sources()
+        self.collector._billing = Collector._billing.__get__(self.collector)
+        self.collector._tokens = Mock(return_value=[])
+        self.collector.http.api.side_effect = [
+            response({
+                "enterprise": "acme", "timePeriod": {"year": 2026, "month": 10, "day": 1},
+                "usageItems": [{"unitType": "AI credits", "netAmount": "12.50"}],
+            }),
+            SourceError("Source request failed."),
+        ]
+        sources = self.collector.collect(DAY, NEXT_DAY)["sources"]
+        self.assertEqual(sources["billing"]["status"], "error")
+        self.assertNotIn("data", sources["billing"])
+        self.assertTrue(all(
+            source["status"] == "ok" for key, source in sources.items() if key != "billing"
+        ))
+
+    def test_partition_failure_does_not_invalidate_enterprise_total(self):
+        self.empty_other_sources()
+        self.collector._billing_centers = Collector._billing_centers.__get__(self.collector)
+        self.collector._cost_centers = Mock(return_value=[
+            {"id": "active", "name": "Active", "state": "active"},
+            {"id": "deleted", "name": "Deleted", "state": "deleted"},
+        ])
+        self.collector._billing.side_effect = [
+            [{"scope": "enterprise", "cost_center_id": "__enterprise__", "netAmount": "20"}],
+            [{"scope": "cost_center", "cost_center_id": "active", "netAmount": "10"}],
+            SourceError("Source access is unavailable.", unavailable=True),
+        ]
+        self.collector._tokens = Mock(return_value=[])
+        sources = self.collector.collect(DAY, DAY)["sources"]
+        self.assertEqual(sources["billing"]["status"], "ok")
+        self.assertEqual(len(sources["billing"]["data"]), 1)
+        self.assertEqual(sources["billing_centers"]["status"], "unavailable")
+        self.assertNotIn("data", sources["billing_centers"])
+
+    def test_missing_cost_center_inventory_does_not_synthesize_partitions(self):
+        with self.assertRaisesRegex(SourceError, "complete cost center inventory"):
+            self.collector._billing_centers(
+                date.fromisoformat(DAY), date.fromisoformat(DAY), {"status": "error"}
+            )
+        self.collector.http.api.assert_not_called()
+
+    def test_empty_inventory_still_queries_unallocated_partition(self):
+        self.collector.http.api.side_effect = [response({
+            "enterprise": "acme", "timePeriod": {"year": 2026, "month": 10, "day": 1},
+            "usageItems": [{"unitType": "AI credits", "netAmount": "1"}],
+        })]
+        rows = self.collector._billing_centers(
+            date.fromisoformat(DAY), date.fromisoformat(DAY), {"status": "ok", "data": []}
+        )
+        self.assertEqual(rows[0]["cost_center_id"], "enterprise-only")
+        self.assertEqual(rows[0]["cost_center_name"], "Enterprise Only")
+        self.assertEqual(rows[0]["scope"], "cost_center")
+        self.assertEqual(self.collector.http.api.call_args.kwargs["query"]["cost_center_id"], "none")
+
+    def test_billing_config_validation_rejects_unsupported_sources_and_currency(self):
+        for extra in (
+            {"billing_report": "summary"}, {"billing_report": "../usage"},
+            {"billing_currency": "not-currency"}, {"billing_currency": 42},
+        ):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                Collector({"enterprise": "acme", **extra}, self.directory)
+
+    def test_complete_billing_rows_match_domain_normalization_contract(self):
+        from copilot_reporting.domain import normalize
+
+        usage_item = {
+            "product": "Copilot", "sku": "copilot-ai-credits", "model": "model-a",
+            "unitType": "AI credits", "pricePerUnit": "0.01",
+            "grossQuantity": "2.001", "discountQuantity": "1.001", "netQuantity": "1",
+            "grossAmount": "0.02001", "discountAmount": "0.01001", "netAmount": "0.01",
+        }
+        self.collector.http.api.side_effect = [
+            response({
+                "enterprise": "acme", "timePeriod": {"year": 2026, "month": 10, "day": 1},
+                "usageItems": [usage_item],
+            }),
+            response({
+                "enterprise": "acme", "timePeriod": {"year": 2026, "month": 10, "day": 1},
+                "costCenter": {"id": "center", "name": "Finance"}, "usageItems": [usage_item],
+            }),
+        ]
+        enterprise_rows = self.collector._billing(
+            date.fromisoformat(DAY), date.fromisoformat(DAY)
+        )
+        center_rows = self.collector._billing(
+            date.fromisoformat(DAY), date.fromisoformat(DAY), "center", "Finance"
+        )
+        enterprise = normalize("billing", enterprise_rows)[0]
+        center = normalize("billing_centers", center_rows)[0]
+        self.assertEqual(enterprise["cost_center_id"], "__enterprise__")
+        self.assertEqual(center["cost_center_id"], "center")
+        self.assertEqual(center["cost_center_name"], "Finance")
+        self.assertEqual(center["gross_amount"], "0.02001")
+        self.assertEqual(center["currency"], "Unknown")
+        self.assertEqual(center["unit"], "AI credits")
+
     def test_completed_export_rows_reused_without_post_or_download(self):
         self.collector.http.api.side_effect = [
             response(job(), status=202),
@@ -574,6 +778,7 @@ class CollectorTests(LocalFixture):
         self.assertEqual(self.collector.http.api.call_count, 2)
         self.assertEqual(self.collector.http.download.call_count, 1)
         persisted = list(self.directory.glob("*.json"))[0]
+        self.assertRegex(persisted.name, r"^export-[0-9a-f]{64}\.json$")
         state = json.loads(persisted.read_text())
         self.assertEqual(state["status"], "completed")
         self.assertGreater(state["expires_at"], state["created_at"])
@@ -656,6 +861,59 @@ class CollectorTests(LocalFixture):
         self.collector._export(DAY, DAY)
         self.assertEqual(self.collector.http.api.call_count, 2)
 
+    def test_completed_cache_refreshes_corrected_period_after_exact_24_hour_ttl(self):
+        self.collector.http.api.side_effect = [
+            response(job("completed", download_urls=["part"])),
+            response(job("completed", download_urls=["part"])),
+        ]
+        self.collector.http.download.side_effect = [CSV, CSV.replace(b",10,2,", b",99,2,")]
+        with patch("copilot_reporting.collector.time.time", return_value=1000):
+            self.assertEqual(self.collector._export(DAY, DAY)[0]["input"], "10")
+        with patch("copilot_reporting.collector.time.time", return_value=87399):
+            self.assertEqual(self.collector._export(DAY, DAY)[0]["input"], "10")
+        self.assertEqual(self.collector.http.api.call_count, 1)
+        with patch("copilot_reporting.collector.time.time", return_value=87400):
+            self.assertEqual(self.collector._export(DAY, DAY)[0]["input"], "99")
+        self.assertEqual(self.collector.http.api.call_count, 2)
+        self.assertEqual(self.collector.http.download.call_count, 2)
+
+    def test_old_inflight_id_resumes_without_post_even_after_cache_ttl(self):
+        self.collector.http.api.side_effect = [
+            response(job()), response(job()),
+            response(job("completed", download_urls=["part"])),
+        ]
+        self.collector.http.download.side_effect = [CSV]
+        with patch("copilot_reporting.collector.time.time", return_value=1000), \
+                self.assertRaisesRegex(SourceError, "still processing"):
+            self.collector._export(DAY, DAY)
+        persisted = next(self.directory.glob("export-*.json"))
+        state = json.loads(persisted.read_text())
+        self.assertIsNone(state["expires_at"])
+        # Older checkpoints may have recorded a now-expired pending TTL.
+        state["expires_at"] = 2000
+        persisted.write_text(json.dumps(state))
+        with patch("copilot_reporting.collector.time.time", return_value=1000000):
+            self.assertEqual(len(self.collector._export(DAY, DAY)), 1)
+        methods = [call.kwargs["method"] for call in self.collector.http.api.call_args_list]
+        self.assertEqual(methods, ["POST", "GET", "GET"])
+
+    def test_ambiguous_submission_never_automatically_expires_into_second_post(self):
+        self.collector.http.api.side_effect = [
+            SourceError("Source request failed."),
+            response({"usage_report_exports": []}),
+        ]
+        with patch("copilot_reporting.collector.time.time", return_value=1000), \
+                self.assertRaises(SourceError):
+            self.collector._export(DAY, DAY)
+        with patch("copilot_reporting.collector.time.time", return_value=1000000), \
+                self.assertRaisesRegex(SourceError, "operator reconciliation"):
+            self.collector._export(DAY, DAY)
+        methods = [call.kwargs["method"] for call in self.collector.http.api.call_args_list]
+        self.assertEqual(methods, ["POST", "GET"])
+        state = json.loads(next(self.directory.glob("export-*.json")).read_text())
+        self.assertEqual(state["status"], "submitting")
+        self.assertIsNone(state["expires_at"])
+
     def test_export_every_part_must_succeed_and_duplicates_fail(self):
         self.collector.http.api.side_effect = [
             response(job("completed", download_urls=["a", "b"]))
@@ -679,6 +937,32 @@ class CollectorTests(LocalFixture):
         self.assertEqual(source["status"], "unavailable")
         self.assertNotIn("data", source)
         self.assertIn("CSV import", source["reason"])
+
+    def test_unknown_export_schemas_and_failed_jobs_are_errors_without_data(self):
+        self.empty_other_sources()
+        cases = [
+            (job("completed", download_urls=["part"]),
+             b"date,model,input,new_token_column\n2026-10-01,m,1,2\n"),
+            (job("completed", download_urls=["part"]),
+             b"date,model,input\n2026-10-01,m,not-an-integer\n"),
+            (job("completed", download_urls=[]), None),
+            (job("completed", download_urls=["part"], report_type="detailed"), None),
+            (job("unknown-status"), None),
+            (job("failed"), None),
+        ]
+        for index, (payload, csv_data) in enumerate(cases):
+            with self.subTest(case=index):
+                state_dir = self.directory / str(index)
+                state_dir.mkdir(mode=0o700)
+                self.collector.state_dir = state_dir
+                self.collector.http.api.side_effect = [response(payload)]
+                self.collector.http.download.side_effect = [csv_data]
+                source = self.collector.collect(DAY, DAY)["sources"]["tokens"]
+                self.assertEqual(source["status"], "error")
+                self.assertNotIn("data", source)
+                persisted = json.loads(next(state_dir.glob("export-*.json")).read_text())
+                self.assertNotEqual(persisted["status"], "completed")
+                self.assertNotIn("rows", persisted)
 
     def test_export_range_split_to_maximum_31_days(self):
         self.collector._export = Mock(return_value=[])

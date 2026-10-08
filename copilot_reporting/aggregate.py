@@ -1,6 +1,7 @@
 """Publish explicit aggregates only; retain unavailable and suppressed populations."""
 
 from collections import defaultdict
+import copy
 import hashlib
 import json
 
@@ -9,6 +10,32 @@ from .domain import SOURCES, TOKENS, days, total, utc_now
 
 def policy_fingerprint(publication):
     return hashlib.sha256(json.dumps(publication, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def retain_last_good(report, previous):
+    """Automatic rolling publication keeps a complete prior window during outages."""
+    if not previous or previous.get("demo") or report["privacy"]["policy_fingerprint"] != previous["privacy"].get("policy_fingerprint"):
+        return report
+    if len(days(report["period"]["start"], report["period"]["end"])) != len(days(previous["period"]["start"], previous["period"]["end"])):
+        return report
+    current = {source["id"]: source for source in report["sources"]}
+    regressed = [
+        source["id"] for source in previous["sources"]
+        if source["last_successful_collection"] and not source["missing_days"]
+        and current[source["id"]]["missing_days"]
+    ]
+    if not regressed:
+        return report
+    retained = copy.deepcopy(previous)
+    for source in retained["sources"]:
+        latest = current[source["id"]]
+        source["status"] = latest["status"]
+        if source["id"] in regressed:
+            source["status"] = "error"
+            source["message"] = "Requested rolling refresh has missing partitions; the last approved reporting window is retained."
+    notice = f"Refresh {report['period']['start']} / {report['period']['end']} UTC incomplete; displaying the last approved window."
+    retained["quality"] = [notice] + [item for item in retained["quality"] if not item.startswith("Refresh ")]
+    return retained
 
 
 def metric(value, unit, source, coverage, start, end):

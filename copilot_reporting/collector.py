@@ -77,6 +77,8 @@ def _prepare_state_directory(state_dir):
 
 
 class Collector:
+    EXPORT_CACHE_SECONDS = 24 * 60 * 60
+
     def __init__(self, config: dict, state_dir: Path):
         if not isinstance(config, dict):
             raise ValueError("Invalid collector configuration.")
@@ -90,6 +92,17 @@ class Collector:
         self.max_rows = positive_limit(config.get("max_rows"), 200000, 2000000)
         self.max_pages = positive_limit(config.get("max_pages"), 1000, 10000)
         self.poll_attempts = positive_limit(config.get("poll_attempts"), 3, 20)
+        self.billing_report = config.get("billing_report", "ai_credit")
+        if self.billing_report not in ("ai_credit", "premium_request"):
+            raise ValueError("Unsupported billing report type.")
+        currency = config.get("billing_currency")
+        if currency == "Unknown":
+            currency = None
+        if currency is not None and (
+            not isinstance(currency, str) or not re.fullmatch(r"[A-Z]{3}", currency)
+        ):
+            raise ValueError("Billing currency must be an explicit currency code or null.")
+        self.billing_currency = currency
         self.token_env = config.get("token_env", "COPILOT_REPORTING_TOKEN")
         self.seat_token_env = config.get("seat_token_env") or self.token_env
         for name in (self.token_env, self.seat_token_env):
@@ -132,10 +145,18 @@ class Collector:
             ("usage", lambda: self._usage(start, end, "users")),
             ("enterprise_usage", lambda: self._usage(start, end, "enterprise")),
             ("billing", lambda: self._billing(start, end)),
+            ("billing_centers", lambda: self._billing_centers(
+                start, end, snapshot["sources"]["cost_centers"]
+            )),
             ("tokens", lambda: self._tokens(start, end)),
         )
         for name, operation in operations:
             source = {"collected_at": _iso_now(), "scope": "enterprise"}
+            if name in ("billing", "billing_centers"):
+                source["report_type"] = self.billing_report
+                source["currency"] = self.billing_currency
+            if name == "billing_centers":
+                source["scope"] = "cost_center"
             if name in ("usage", "enterprise_usage"):
                 source["missing_days"] = []
             try:
@@ -144,19 +165,29 @@ class Collector:
             except UnsupportedTokenSchema:
                 source.update(
                     status="unavailable",
+                    error_code="unsupported_schema",
                     reason="Token report schema is unsupported; use an approved CSV import.",
                 )
             except TokenImportError:
-                source.update(status="error", reason="Token report validation failed.")
+                source.update(status="error", error_code="invalid_import",
+                              reason="Token report validation failed.")
             except SourceError as error:
+                error_code = {
+                    401: "access_denied", 403: "access_denied",
+                    404: "unsupported_or_missing", 429: "rate_limited",
+                }.get(error.status, "collection_failed")
+                if error.missing_days:
+                    error_code = "missing_days"
                 source.update(
                     status="unavailable" if error.unavailable else "error",
+                    error_code=error_code,
                     reason=str(error),
                 )
                 if name in ("usage", "enterprise_usage"):
                     source["missing_days"] = error.missing_days or list(_days(start, end))
             except (OSError, ValueError, TypeError, KeyError, RecursionError):
-                source.update(status="error", reason="Source collection failed safely.")
+                source.update(status="error", error_code="collection_failed",
+                              reason="Source collection failed safely.")
                 if name in ("usage", "enterprise_usage"):
                     source["missing_days"] = list(_days(start, end))
             snapshot["sources"][name] = source
@@ -302,21 +333,81 @@ class Collector:
             )
         return rows
 
-    def _billing(self, start, end):
+    def _billing(self, start, end, cost_center_id=None, cost_center_name=None):
+        """Keep source units and inject dimensions absent from usageItems.
+
+        Unfiltered daily totals and filtered cost-center partitions are separate
+        datasets; neither is added to the other. Currency is operator-supplied,
+        never inferred from pricePerUnit or the enterprise's location.
+        """
+        if cost_center_id is not None:
+            _identifier(cost_center_id)
+        scope = "enterprise" if cost_center_id is None else "cost_center"
+        if cost_center_id is None:
+            normalized_id, normalized_name = "__enterprise__", "Enterprise total"
+        elif cost_center_id == "none":
+            normalized_id, normalized_name = "enterprise-only", "Enterprise Only"
+        else:
+            normalized_id, normalized_name = cost_center_id, cost_center_name
         rows = []
         for day in _days(start, end):
             parsed_day = date.fromisoformat(day)
             period = {"year": parsed_day.year, "month": parsed_day.month, "day": parsed_day.day}
+            query = dict(period)
+            if cost_center_id is not None:
+                query["cost_center_id"] = cost_center_id
             payload = _object(self._api(
-                "/settings/billing/ai_credit/usage", query=period
+                "/settings/billing/" + self.billing_report + "/usage", query=query
             ).json())
             if payload.get("enterprise") != self.enterprise or payload.get("timePeriod") != period:
                 raise SourceError("Billing report scope does not match the request.")
+            returned_center = payload.get("costCenter")
+            name = normalized_name
+            if returned_center is not None:
+                if cost_center_id is None or not isinstance(returned_center, dict):
+                    raise SourceError("Billing report cost center does not match the request.")
+                if returned_center.get("id") != cost_center_id:
+                    raise SourceError("Billing report cost center does not match the request.")
+                if cost_center_id != "none" and returned_center.get("name") is not None:
+                    if not isinstance(returned_center["name"], str) or not returned_center["name"]:
+                        raise SourceError("Billing report cost center name is invalid.")
+                    name = returned_center["name"]
             for item in _objects(payload.get("usageItems")):
                 if any(item.get(key, day) != day for key in ("day", "date")):
                     raise SourceError("Billing row period does not match the request.")
-                rows.append({**item, "day": day, "date": day, "timePeriod": period})
+                rows.append({
+                    **item, "day": day, "date": day, "timePeriod": period,
+                    "scope": scope, "cost_center_id": normalized_id,
+                    "cost_center_name": name, "currency": self.billing_currency,
+                    "report_type": self.billing_report,
+                })
                 self._bounded(rows)
+        return rows
+
+    def _billing_centers(self, start, end, center_source):
+        if center_source.get("status") != "ok":
+            raise SourceError(
+                "Cost center billing requires a complete cost center inventory.",
+                unavailable=True,
+            )
+        centers = self._bounded(_objects(center_source.get("data")))
+        partitions, seen = [], set()
+        for center in centers:
+            center_id = _identifier(center.get("id"))
+            if center_id in seen or center_id in ("none", "__enterprise__", "enterprise-only"):
+                raise SourceError("Cost center inventory contains duplicate or reserved identifiers.")
+            seen.add(center_id)
+            name = center.get("name")
+            if not isinstance(name, str) or not name:
+                raise SourceError("Cost center inventory is missing a name.")
+            partitions.append((center_id, name))
+        partitions.append(("none", "Enterprise Only"))
+        rows = []
+        for center_id, name in partitions:
+            partition_rows = self._billing(start, end, center_id, name)
+            if len(rows) + len(partition_rows) > self.max_rows:
+                raise SourceError("Cost center billing exceeds the row limit.")
+            rows.extend(partition_rows)
         return rows
 
     def _tokens(self, start, end):
@@ -359,12 +450,16 @@ class Collector:
         if len(data) > self.http.max_response_bytes:
             raise SourceError("Export state exceeds the byte limit.")
         state = _object(parse_json(data))
-        if (state.get("schema_version") != 1 or type(state.get("expires_at")) is not int
-                or type(state.get("created_at")) is not int):
+        if (state.get("schema_version") != 1 or type(state.get("created_at")) is not int
+                or "expires_at" not in state
+                or (state["expires_at"] is not None and type(state["expires_at"]) is not int)):
             raise SourceError("Export state is invalid.")
-        if state["expires_at"] <= int(time.time()):
-            path.unlink()
-            return None
+        if state.get("status") in ("completed", "failed"):
+            if type(state["expires_at"]) is not int:
+                raise SourceError("Export state is invalid.")
+            if state["expires_at"] <= int(time.time()):
+                path.unlink()
+                return None
         return state
 
     def _write_state(self, key, state):
@@ -414,7 +509,7 @@ class Collector:
                 candidates.append((created.timestamp(), job))
         if not candidates:
             raise SourceError(
-                "Export submission is unresolved; retry after the state expires.",
+                "Export submission is unresolved; operator reconciliation is required.",
                 unavailable=True,
             )
         return self._validate_job(max(candidates, key=lambda item: item[0])[1], start, end)
@@ -422,7 +517,7 @@ class Collector:
     def _export(self, start, end):
         if not os.environ.get(self.token_env):
             raise SourceError("Credential is unavailable.", unavailable=True)
-        key = hashlib.sha256(
+        key = "export-" + hashlib.sha256(
             "\n".join((self.http.api_origin, self.enterprise, start, end)).encode()
         ).hexdigest()
         with self._state_lock(key):
@@ -430,12 +525,12 @@ class Collector:
             if state and state.get("status") == "completed":
                 return validate_canonical_rows(state.get("rows"), start, end, self.max_rows)
             if state and state.get("status") == "failed":
-                raise SourceError("Export failed; retry after the state expires.", unavailable=True)
+                raise SourceError("Export failed; retry after the state expires.")
             if state is None:
                 timestamp = int(time.time())
                 state = {
                     "schema_version": 1, "status": "submitting",
-                    "created_at": timestamp, "expires_at": timestamp + 86400,
+                    "created_at": timestamp, "expires_at": None,
                 }
                 self._write_state(key, state)
                 job = self._validate_job(self._api(
@@ -450,14 +545,17 @@ class Collector:
                 job = {"id": report_id, "status": "processing"}
             else:
                 raise SourceError("Export state is invalid.")
-            state.update(id=job["id"], status="processing")
+            # Unknown/in-flight jobs never expire into a blind POST. The separate
+            # operator retention policy governs checkpoint removal from storage.
+            state.update(id=job["id"], status="processing", expires_at=None)
             # Keep only job identity, never expiring signed links or API payloads.
             self._write_state(key, state)
             for attempt in range(self.poll_attempts + 1):
                 if job["status"] == "failed":
-                    state.update(status="failed", expires_at=int(time.time()) + 86400)
+                    state.update(status="failed",
+                                 expires_at=int(time.time()) + self.EXPORT_CACHE_SECONDS)
                     self._write_state(key, state)
-                    raise SourceError("Report export failed.", unavailable=True)
+                    raise SourceError("Report export failed.")
                 if job["status"] == "completed":
                     rows = []
                     for link in self._links(job.get("download_urls")):
@@ -470,7 +568,7 @@ class Collector:
                     # A day's cache prevents duplicate exports during retries while
                     # allowing provisional billing periods to refresh tomorrow.
                     state.update(status="completed", rows=rows,
-                                 expires_at=int(time.time()) + 86400)
+                                 expires_at=int(time.time()) + self.EXPORT_CACHE_SECONDS)
                     self._write_state(key, state)
                     return rows
                 if attempt == self.poll_attempts:

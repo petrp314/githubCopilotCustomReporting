@@ -79,6 +79,13 @@ class CommandTests(unittest.TestCase):
             publish({"schema_version": 2}, site)
         self.assertEqual(json.loads((site / "data" / "report.json").read_text()), {"schema_version": 2})
         self.assertEqual(sorted(str(p.relative_to(site)) for p in site.rglob("*")), ["data", "data/report.json"])
+        self.assertEqual(site.stat().st_mode & 0o777, 0o700)
+        self.assertEqual((site / "data" / "report.json").stat().st_mode & 0o777, 0o600)
+
+    def test_private_history_cannot_be_inside_another_git_tree(self):
+        (self.root / ".git").mkdir()
+        with self.assertRaises(ValueError):
+            Store(self.root / "private", "synthetic")
 
 
 if __name__ == "__main__":

@@ -25,9 +25,13 @@ def publish(report, output):
     if len(payload) > 50_000_000:
         raise ValueError("Approved snapshot exceeds publication size limit")
     assets = {name: (ROOT / "web" / name).read_bytes() for name in ASSETS}
-    (output / "data").mkdir(parents=True, exist_ok=True)
+    output.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(output, 0o700)
+    (output / "data").mkdir(mode=0o700, exist_ok=True)
+    os.chmod(output / "data", 0o700)
     for name, content in {**assets, "data/report.json": payload}.items():
         temporary = output / (name + ".tmp")
-        with temporary.open("xb") as handle:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
             handle.write(content)
         os.replace(temporary, output / name)

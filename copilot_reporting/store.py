@@ -17,6 +17,8 @@ def protected_directory(path):
     path = Path(path).resolve()
     if path == ROOT or ROOT in path.parents:
         raise ValueError("Protected storage must be outside the repository")
+    if any((parent / ".git").exists() for parent in (path, *path.parents)):
+        raise ValueError("Protected storage must be outside Git working trees")
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.is_symlink() or path.stat().st_uid != os.getuid() or path.stat().st_mode & 0o077:
         raise ValueError("Protected storage must be owner-only (mode 0700)")
@@ -24,7 +26,7 @@ def protected_directory(path):
 
 
 class Store:
-    def __init__(self, path, enterprise):
+    def __init__(self, path, enterprise, api_origin="https://api.github.com"):
         directory = protected_directory(path)
         db = directory / "reporting.sqlite"
         if db.is_symlink():
@@ -52,8 +54,13 @@ class Store:
         if existing and existing["value"] != enterprise:
             self.connection.close()
             raise ValueError("Storage belongs to a different enterprise")
+        existing_origin = self.connection.execute("SELECT value FROM metadata WHERE key='api_origin'").fetchone()
+        if existing_origin and existing_origin["value"] != api_origin:
+            self.connection.close()
+            raise ValueError("Storage belongs to a different API origin")
         with self.connection:
             self.connection.execute("INSERT OR IGNORE INTO metadata VALUES ('enterprise', ?)", (enterprise,))
+            self.connection.execute("INSERT OR IGNORE INTO metadata VALUES ('api_origin', ?)", (api_origin,))
 
     def close(self):
         self.connection.close()
@@ -64,6 +71,10 @@ class Store:
         enterprise = self.connection.execute("SELECT value FROM metadata WHERE key='enterprise'").fetchone()[0]
         if snapshot.get("enterprise") != enterprise:
             raise ValueError("Snapshot enterprise mismatch")
+        if snapshot.get("api_version"):
+            with self.connection:
+                self.connection.execute("INSERT OR REPLACE INTO metadata VALUES ('api_version', ?)",
+                                        (snapshot["api_version"],))
         start, end = snapshot["start_day"], snapshot["end_day"]
         period = days(start, end)
         collected_at = snapshot["collected_at"]
@@ -98,6 +109,14 @@ class Store:
                 message = "Source unavailable; verify tenant capability and read permissions."
             else:
                 status, message = "error", "Collection failed; verify source access and retry."
+            if status != "ok":
+                message = {
+                    "access_denied": "Access denied; verify credential scope, endpoint permissions, and enterprise metrics policy.",
+                    "unsupported_or_missing": "Source report unavailable or missing; verify entitlement and publication delay.",
+                    "rate_limited": "Source rate limit reached; retry after the upstream reset.",
+                    "unsupported_schema": "Token export schema unsupported; validate tenant columns or use an approved import.",
+                    "invalid_import": "Token import failed schema, bounds, or period validation.",
+                }.get(item.get("error_code"), message)
             with self.connection:
                 if status == "ok":
                     for partition, data in partitioned.items():
@@ -144,6 +163,10 @@ class Store:
         if not row:
             raise ValueError("No approved archive exists for this exact reporting window")
         return json.loads(row["payload"])
+
+    def latest_aggregate(self):
+        row = self.connection.execute("SELECT payload FROM aggregates ORDER BY end_day DESC LIMIT 1").fetchone()
+        return json.loads(row["payload"]) if row else None
 
     def expire(self, raw_days, aggregate_days, today=None):
         today = today or date.today()

@@ -1,5 +1,6 @@
 import contextlib
 from email.message import Message
+from http.client import IncompleteRead
 import io
 import json
 import os
@@ -169,6 +170,8 @@ class PreflightTests(unittest.TestCase):
             HTTPError("https://example.invalid/sensitive", 403, "sensitive", {}, None),
             URLError("sensitive"),
             ValueError("sensitive"),
+            IncompleteRead(b"sensitive"),
+            RecursionError("sensitive"),
         ]
         for failure in failures:
             with self.subTest(failure=type(failure)), patch.dict(os.environ, ENVIRONMENT, clear=True):
@@ -361,6 +364,54 @@ class FilesystemTests(unittest.TestCase):
         linked.symlink_to(output, target_is_directory=True)
         with self.assertRaises(deployment.DeploymentError):
             deployment.validate_site(linked)
+
+
+class WorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.workflows = Path(__file__).resolve().parent.parent / ".github" / "workflows"
+
+    def test_ci_never_receives_enterprise_secrets_or_publishes_artifacts(self):
+        ci = (self.workflows / "ci.yml").read_text(encoding="utf-8")
+        self.assertIn("pull_request:", ci)
+        self.assertIn("contents: read", ci)
+        self.assertIn("runs-on: ubuntu-24.04", ci)
+        self.assertIn("npm test", ci)
+        self.assertIn("npm run build", ci)
+        for forbidden in ("secrets.", "self-hosted", "upload-", "deploy-", "pages: write"):
+            self.assertNotIn(forbidden, ci)
+
+    def test_reporting_separates_collection_and_hosted_deployment(self):
+        reporting = (self.workflows / "reporting.yml").read_text(encoding="utf-8")
+        collection, deployment_job = reporting.split("\n  deploy:\n")
+        self.assertIn("workflow_dispatch:", collection)
+        self.assertIn("schedule:", collection)
+        self.assertNotIn("pull_request", reporting)
+        self.assertIn("runs-on: [self-hosted, Linux, copilot-reporting]", collection)
+        self.assertIn("environment: reporting-collection", collection)
+        self.assertIn("pages: read", collection)
+        self.assertNotIn("pages: write", collection)
+        self.assertIn("runs-on: ubuntu-24.04", deployment_job)
+        self.assertIn("name: github-pages", deployment_job)
+        self.assertIn("pages: write", deployment_job)
+        self.assertIn("id-token: write", deployment_job)
+        self.assertNotIn("secrets.", deployment_job)
+        for job in (collection, deployment_job):
+            self.assertIn("vars.REPORTING_ENABLED == 'true'", job)
+            self.assertIn("github.event.repository.private == true", job)
+            self.assertIn("github.event.repository.owner.type == 'Organization'", job)
+            self.assertIn("github.repository_owner == vars.REPORTING_APPROVED_ORGANIZATION", job)
+            self.assertIn("github.event.repository.default_branch", job)
+            self.assertIn("python -m copilot_reporting.deployment", job)
+            self.assertIn("GITHUB_TOKEN: ${{ github.token }}", job)
+        self.assertLess(collection.index("python -m copilot_reporting.deployment"),
+                        collection.index("python -m copilot_reporting collect"))
+        self.assertLess(collection.index("--output dist\n", collection.index("Recheck private destination")),
+                        collection.index("uses: actions/upload-pages-artifact"))
+        self.assertLess(deployment_job.index("python -m copilot_reporting.deployment"),
+                        deployment_job.index("uses: actions/deploy-pages"))
+        self.assertIn("retention-days: 1", collection)
+        self.assertIn("path: dist", collection)
+        self.assertIn("if: always()", collection)
 
 
 if __name__ == "__main__":

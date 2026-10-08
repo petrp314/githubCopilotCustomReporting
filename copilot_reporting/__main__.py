@@ -8,7 +8,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .aggregate import build_report, policy_fingerprint
+from .aggregate import build_report, policy_fingerprint, retain_last_good
 from .domain import days, utc_now
 from .publish import publish
 from .store import Store
@@ -67,7 +67,7 @@ def run(args):
     config = configuration(args.config)
     if args.command != "expire" and config.get("enterprise_scope_verified") is not True:
         raise ValueError("Verify the credential's full intended enterprise visibility before using live data")
-    store = Store(args.store, config["enterprise"])
+    store = Store(args.store, config["enterprise"], config.get("api_origin", "https://api.github.com"))
     try:
         if args.command == "expire":
             store.expire(config["raw_retention_days"], config["aggregate_retention_days"])
@@ -87,6 +87,7 @@ def run(args):
         if args.command == "collect":
             from .collector import Collector
             snapshot = Collector(config, Path(args.store)).collect(start, end)
+            snapshot["api_version"] = config.get("api_version", "2026-03-10")
             store.ingest(snapshot)
             statuses = store.statuses()
             failures = sum(item["status"] != "ok" for item in statuses.values())
@@ -116,6 +117,8 @@ def run(args):
                 raise ValueError("Archive privacy policy differs; reapproval and regeneration are required")
         else:
             report = build_report(store, start, end, approval)
+            if not args.start and not args.end:
+                report = retain_last_good(report, store.latest_aggregate())
         destination = Path(args.output).resolve()
         private = Path(args.store).resolve()
         if destination == private or private in destination.parents or destination in private.parents:
