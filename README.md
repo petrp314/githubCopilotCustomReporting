@@ -9,8 +9,9 @@ This is not a production-ready or approved live deployment.**
 [`requirements.txt`](requirements.txt) is the research/specification document,
 **not a pip requirements file**. Its source references and acceptance criteria
 remain applicable; its original documentation-only baseline predates this code.
-The current personal-owner repository is **not** an eligible EMU Pages deployment
-location. Use an approved, private, organization-owned **project** repository.
+The current personal-owner repository is **not** an eligible live EMU Pages
+deployment location. It may host the public **synthetic demo only**; live reporting
+requires an approved, private, organization-owned **project** repository.
 
 ## Try the synthetic dashboard
 
@@ -28,6 +29,35 @@ tests. The build is `python -m copilot_reporting demo --output dist`; preview is
 `python -m http.server 8000 --bind 127.0.0.1 --directory dist`. Demo output is
 explicitly synthetic. CI tests/builds it on hosted runners and never deploys or
 uploads it. Never serve live data with this unauthenticated preview server.
+
+### Publish the mocked dashboard to GitHub Pages
+
+Demo URL after deployment:
+<https://petrp314.github.io/githubCopilotCustomReporting/>.
+
+1. In this repository's **Settings → Pages → Build and deployment**, select
+   **GitHub Actions** as the source. A repository administrator must enable Pages;
+   committing the workflow alone does not activate the site.
+2. Merge these changes into the default branch. The separate **Publish synthetic
+   dashboard** workflow (`.github/workflows/demo-pages.yml`) tests, builds, and
+   deploys the mocked output on default-branch pushes. To republish, run it from
+   **Actions → Publish synthetic dashboard → Run workflow**, selecting the default
+   branch. Approve the `github-pages` environment deployment if required.
+3. Use the deployment URL shown by the successful workflow run to present the
+   dashboard. The visible **DEMO · Synthetic data, not enterprise activity**
+   label distinguishes the fictional October 1–3, 2026 data from live reporting.
+
+The demo reuses the deterministic fixture generator: 12 fictional licensed and
+active users, model activity, two billing/token attribution groups, and daily
+trends. It needs no enterprise credentials, API requests, configuration, or
+imports. Only the four static dashboard assets and synthetic `data/report.json`
+are uploaded; the workflow verifies the static allowlist and `demo: true` before
+upload. Asset/data URLs are relative, so the repository Pages subpath works.
+
+This public-demo workflow runs only in this personal-owner repository, only on
+the default branch, and only while `REPORTING_ENABLED` is not `true`. It is
+separate from the opt-in private reporting workflow and cannot run in an
+organization-owned live deployment. Never publish live output through it.
 
 The dashboard provides sortable accessible tables, billing rank bars,
 date/model/cost-center filters, and safe filtered-table CSV exports. Daily and
