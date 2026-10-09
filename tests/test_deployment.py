@@ -370,6 +370,31 @@ class WorkflowTests(unittest.TestCase):
     def setUp(self):
         self.workflows = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 
+    def test_demo_pages_is_isolated_from_private_reporting(self):
+        workflow = (self.workflows / "demo-pages.yml").read_text(encoding="utf-8")
+        build, deploy = workflow.split("\n  deploy:\n")
+        for job in (build, deploy):
+            self.assertIn("github.repository == 'petrp314/githubCopilotCustomReporting'", job)
+            self.assertIn("github.event.repository.owner.type == 'User'", job)
+            self.assertIn("vars.REPORTING_ENABLED != 'true'", job)
+            self.assertIn("github.event.repository.default_branch", job)
+            self.assertIn("runs-on: ubuntu-24.04", job)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("push:", workflow)
+        self.assertIn("npm test", build)
+        self.assertIn("npm run build", build)
+        self.assertIn('validate_site("dist")', build)
+        self.assertIn('report.get("demo") is not True', build)
+        self.assertIn("path: dist", build)
+        self.assertNotIn("pages: write", build)
+        self.assertNotIn("id-token: write", build)
+        self.assertIn("needs: build", deploy)
+        self.assertIn("name: github-pages", deploy)
+        self.assertIn("pages: write", deploy)
+        self.assertIn("id-token: write", deploy)
+        for forbidden in ("secrets.", "self-hosted", "pull_request", "--config", "--store"):
+            self.assertNotIn(forbidden, workflow)
+
     def test_ci_never_receives_enterprise_secrets_or_publishes_artifacts(self):
         ci = (self.workflows / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("pull_request:", ci)

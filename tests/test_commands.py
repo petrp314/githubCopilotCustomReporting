@@ -9,6 +9,7 @@ from unittest.mock import patch
 from copilot_reporting.__main__ import configuration, run
 from copilot_reporting.aggregate import build_report
 from copilot_reporting.demo import APPROVAL, END, START, snapshots
+from copilot_reporting.deployment import SITE_FILES, validate_site
 from copilot_reporting.publish import publish
 from copilot_reporting.store import Store
 
@@ -26,6 +27,25 @@ class CommandTests(unittest.TestCase):
 
     def tearDown(self):
         self.temporary.cleanup()
+
+    def test_demo_builds_only_synthetic_static_output_without_collection(self):
+        site = self.root / "site"
+        args = argparse.Namespace(command="demo", output=site)
+        with patch("copilot_reporting.__main__.configuration") as config, \
+                patch("urllib.request.urlopen", side_effect=AssertionError("Network forbidden")):
+            self.assertEqual(run(args), 0)
+        config.assert_not_called()
+        validate_site(site)
+        files = {str(path.relative_to(site)) for path in site.rglob("*") if path.is_file()}
+        self.assertEqual(files, set(SITE_FILES))
+        payload = (site / "data/report.json").read_text(encoding="utf-8")
+        report = json.loads(payload)
+        self.assertIs(report["demo"], True)
+        self.assertEqual(report["overview"]["licensed_users"]["value"], 12)
+        for section in ("daily", "models", "billing", "tokens"):
+            self.assertTrue(report[section])
+        for private_field in ("synthetic-user", "user_id", "login", "assignee"):
+            self.assertNotIn(private_field, payload)
 
     def test_configuration_rejects_invalid_retention(self):
         for value in (True, 0, -1, 396, "30"):
