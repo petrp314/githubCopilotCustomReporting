@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="A five-slide technical overview of the conditional, aggregate-only GitHub Copilot reporting solution.">
+  <title>Copilot reporting | Solution overview</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #07121f;
+      color: #eef5ff;
+      font-synthesis: none;
+      --ink: #eef5ff;
+      --muted: #a5b6ca;
+      --line: #2b3d52;
+      --panel: #101f30;
+      --teal: #55e0c0;
+      --blue: #83b9ff;
+      --violet: #bea4ff;
+      --amber: #ffd078;
+      --coral: #ff958b;
+    }
+    * { box-sizing: border-box; }
+    body { min-width: 320px; min-height: 100vh; margin: 0; background: radial-gradient(ellipse at 78% 5%, #142944 0, #07121f 43rem); }
+    button { font: inherit; }
+    button:focus-visible { outline: 3px solid var(--amber); outline-offset: 4px; }
+    [hidden] { display: none !important; }
+    .deck { width: min(1440px, 100%); min-height: 100vh; margin: 0 auto; padding: 26px clamp(20px, 5vw, 76px) 20px; display: flex; flex-direction: column; }
+    .topbar, .controls, .brand, .slide-count, .button-row { display: flex; align-items: center; }
+    .topbar { justify-content: space-between; gap: 20px; min-height: 42px; }
+    .brand { gap: 11px; color: #d9e5f5; font-size: .82rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+    .brand-mark { display: grid; place-items: center; width: 31px; height: 31px; border: 1px solid #3f8f88; border-radius: 9px; color: var(--teal); background: #12302f; font-size: .78rem; }
+    .edition { color: var(--muted); font: 600 .72rem ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .08em; }
+    main { display: flex; flex: 1; align-items: center; padding: clamp(26px, 5vh, 62px) 0 32px; }
+    .slide { width: 100%; animation: enter .38s ease both; }
+    @keyframes enter { from { opacity: .3; transform: translateY(9px); } to { opacity: 1; transform: translateY(0); } }
+    .eyebrow { display: flex; align-items: center; gap: 10px; margin: 0 0 15px; color: var(--teal); font: 700 .73rem ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .15em; text-transform: uppercase; }
+    .eyebrow::before { width: 23px; height: 1px; background: currentColor; content: ""; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1, h2 { max-width: 850px; margin-bottom: 18px; font-size: clamp(2.3rem, 5.8vw, 5rem); line-height: 1.02; letter-spacing: -.055em; }
+    h2 { font-size: clamp(2rem, 4.1vw, 3.6rem); }
+    h3 { margin-bottom: 9px; font-size: 1rem; }
+    .lede { max-width: 670px; margin-bottom: 0; color: #bdcbdb; font-size: clamp(1rem, 1.5vw, 1.22rem); line-height: 1.65; }
+    .accent { color: var(--teal); }
+    .accent-blue { color: var(--blue); }
+    .accent-violet { color: var(--violet); }
+    .accent-amber { color: var(--amber); }
+    .cover-grid { display: grid; grid-template-columns: 1fr 1.03fr; align-items: center; gap: clamp(30px, 5vw, 75px); }
+    .cover h1 { max-width: 590px; }
+    .cover-meta { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 28px; }
+    .pill { padding: 8px 11px; border: 1px solid var(--line); border-radius: 7px; color: #d1deee; background: #0c1b2b; font: 600 .73rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .diagram-frame { overflow: hidden; border: 1px solid #2c4159; border-radius: 17px; background: linear-gradient(145deg, #13263a, #0b1725 75%); box-shadow: 0 24px 80px #0004; }
+    .diagram-frame svg { display: block; width: 100%; height: auto; }
+    .diagram-caption { display: flex; justify-content: space-between; gap: 12px; padding: 13px 17px; border-top: 1px solid #26384c; color: var(--muted); font: 600 .67rem ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .04em; }
+    .diagram-caption strong { color: var(--teal); }
+    .section-head { display: flex; justify-content: space-between; align-items: end; gap: 24px; margin-bottom: 28px; }
+    .section-head h2 { margin-bottom: 0; }
+    .section-head .lede { max-width: 430px; font-size: .97rem; }
+    .pipeline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+    .step-card { position: relative; min-height: 242px; padding: 21px; border: 1px solid var(--line); border-radius: 12px; background: linear-gradient(145deg, #142539, #0e1b2b); }
+    .step-card:not(:last-child)::after { position: absolute; z-index: 2; top: 43px; right: -19px; width: 23px; height: 1px; background: #537087; content: ""; }
+    .step-num { display: grid; place-items: center; width: 34px; height: 34px; margin-bottom: 24px; border: 1px solid #366b73; border-radius: 9px; color: var(--teal); background: #123032; font: 700 .76rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .step-card:nth-child(2) .step-num { color: var(--blue); border-color: #3c5f87; background: #182a40; }
+    .step-card:nth-child(3) .step-num { color: var(--violet); border-color: #62518a; background: #28233e; }
+    .step-card:nth-child(4) .step-num { color: var(--amber); border-color: #826b43; background: #332b1f; }
+    .step-card p { margin: 0; color: var(--muted); font-size: .88rem; line-height: 1.58; }
+    .tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
+    .tag { padding: 4px 7px; border-radius: 4px; color: #aabbd0; background: #1a2b3e; font: 600 .64rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .strip { display: flex; align-items: center; gap: 12px; margin-top: 18px; padding: 12px 16px; border-left: 2px solid var(--blue); color: #c0ccda; background: #102033; font-size: .82rem; }
+    .strip strong { color: var(--blue); }
+    .boundary-layout { display: grid; grid-template-columns: 1.2fr .8fr; gap: 24px; align-items: stretch; }
+    .architecture { position: relative; padding: 22px; border: 1px solid #324862; border-radius: 13px; background: #0b1928; }
+    .arch-label { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 15px; color: var(--muted); font: 600 .67rem ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; }
+    .trust-boundary { padding: 15px; border: 1px dashed #45a995; border-radius: 10px; background: #10272350; }
+    .boundary-title { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; color: var(--teal); font: 700 .68rem ui-monospace, SFMono-Regular, Consolas, monospace; text-transform: uppercase; letter-spacing: .06em; }
+    .arch-flow { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 9px; align-items: center; }
+    .node { min-height: 88px; display: flex; flex-direction: column; justify-content: center; padding: 12px; border: 1px solid #31485f; border-radius: 8px; background: #142539; }
+    .node strong { margin-bottom: 6px; font-size: .78rem; }
+    .node span { color: var(--muted); font: .65rem ui-monospace, SFMono-Regular, Consolas, monospace; line-height: 1.4; }
+    .node.output { border-color: #3a806f; background: #122a2b; }
+    .arrow { color: #7591a9; font-size: 1.2rem; }
+    .outside-note { display: flex; gap: 10px; margin: 12px 0 0; color: #b8c6d6; font-size: .74rem; line-height: 1.5; }
+    .outside-note b { color: var(--coral); }
+    .guardrails { display: grid; gap: 10px; }
+    .guardrail { display: grid; grid-template-columns: 32px 1fr; gap: 11px; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: #101f30; }
+    .guard-icon { color: var(--teal); font: 700 .8rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .guardrail p { margin: 0; color: var(--muted); font-size: .78rem; line-height: 1.5; }
+    .guardrail strong { color: #e8f0fb; }
+    .dashboard-layout { display: grid; grid-template-columns: 1.1fr .9fr; gap: 22px; align-items: center; }
+    .mock-window { overflow: hidden; border: 1px solid #334b64; border-radius: 13px; background: #0d1b2a; box-shadow: 0 22px 60px #0003; }
+    .window-bar { display: flex; align-items: center; gap: 6px; padding: 12px 15px; border-bottom: 1px solid #293d52; color: #94a8bd; font: .65rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .window-bar i { width: 7px; height: 7px; border-radius: 50%; background: #ff827b; }
+    .window-bar i:nth-child(2) { background: #f5c36b; }
+    .window-bar i:nth-child(3) { background: #57d5a4; margin-right: 8px; }
+    .mock-content { padding: 18px; }
+    .mock-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; font-size: .83rem; font-weight: 700; }
+    .mock-title span { color: var(--teal); font: 600 .61rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .metric-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+    .metric { padding: 12px; border: 1px solid #263b50; border-radius: 8px; background: #122337; }
+    .metric small { display: block; margin-bottom: 7px; color: #a4b4c7; font-size: .62rem; }
+    .metric b { font-size: 1.13rem; letter-spacing: -.03em; }
+    .metric .mini { color: var(--teal); font: 600 .58rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .chart { position: relative; height: 116px; margin-top: 12px; padding: 13px; border: 1px solid #263b50; border-radius: 8px; background: linear-gradient(#122337, #102031); }
+    .chart-label { color: #9fb1c5; font-size: .64rem; }
+    .chart svg { width: 100%; height: 69px; margin-top: 2px; overflow: visible; }
+    .dashboard-notes { display: grid; gap: 13px; }
+    .dash-note { display: flex; gap: 13px; padding-bottom: 13px; border-bottom: 1px solid #26384c; }
+    .dash-note:last-child { border: 0; }
+    .dash-note .glyph { flex: 0 0 30px; color: var(--blue); font: 700 1rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .dash-note p { margin: 0; color: var(--muted); font-size: .83rem; line-height: 1.52; }
+    .dash-note strong { color: #edf4ff; }
+    .readiness { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+    .status-card { padding: 21px; border: 1px solid var(--line); border-radius: 12px; background: #101f30; }
+    .status-card.ready { border-color: #3c6f68; }
+    .status-head { display: flex; justify-content: space-between; align-items: center; gap: 15px; margin-bottom: 17px; }
+    .status-head h3 { margin: 0; font-size: 1.05rem; }
+    .status-label { padding: 5px 8px; border: 1px solid #7e6844; border-radius: 5px; color: var(--amber); background: #30281d; font: 700 .6rem ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .04em; }
+    .ready .status-label { border-color: #35776d; color: var(--teal); background: #12302b; }
+    .checklist { display: grid; gap: 11px; margin: 0; padding: 0; list-style: none; }
+    .checklist li { display: grid; grid-template-columns: 19px 1fr; gap: 9px; color: #b9c8d8; font-size: .79rem; line-height: 1.45; }
+    .checklist li::before { content: "○"; color: var(--amber); font-size: .88rem; }
+    .ready .checklist li::before { content: "✓"; color: var(--teal); }
+    .final-note { margin-top: 16px; padding: 13px 16px; border-left: 2px solid var(--coral); color: #d2dce8; background: #251c27; font-size: .78rem; line-height: 1.5; }
+    .controls { justify-content: space-between; gap: 18px; padding-top: 16px; border-top: 1px solid #26384c; }
+    .slide-count { gap: 12px; color: var(--muted); font: 600 .7rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .progress-track { width: clamp(76px, 12vw, 160px); height: 3px; overflow: hidden; border-radius: 4px; background: #293c50; }
+    .progress-fill { width: 20%; height: 100%; background: var(--teal); transition: width .25s ease; }
+    .button-row { gap: 8px; }
+    .nav-btn { min-width: 40px; min-height: 38px; padding: 7px 12px; border: 1px solid #3a5068; border-radius: 7px; color: #e4edf8; background: #112135; cursor: pointer; }
+    .nav-btn:hover:not(:disabled) { border-color: var(--teal); color: var(--teal); }
+    .nav-btn:disabled { opacity: .4; cursor: not-allowed; }
+    .dots { display: flex; align-items: center; gap: 6px; margin: 0 9px; }
+    .dot { width: 8px; height: 8px; padding: 0; border: 0; border-radius: 8px; background: #43566b; cursor: pointer; transition: width .2s, background .2s; }
+    .dot[aria-current="true"] { width: 22px; background: var(--teal); }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+    @media (max-width: 850px) {
+      .cover-grid, .boundary-layout, .dashboard-layout { grid-template-columns: 1fr; }
+      .cover-grid { gap: 27px; }
+      .diagram-frame { max-width: 620px; }
+      .section-head { align-items: start; flex-direction: column; gap: 11px; }
+      .section-head .lede { max-width: 650px; }
+      .step-card { min-height: 220px; }
+    }
+    @media (max-width: 620px) {
+      .deck { padding: 15px 18px 14px; }
+      main { padding: 28px 0 22px; }
+      .edition { font-size: .59rem; }
+      .brand { font-size: .69rem; }
+      .pipeline { grid-template-columns: 1fr 1fr; gap: 9px; }
+      .step-card { min-height: 0; padding: 15px; }
+      .step-card:not(:last-child)::after { display: none; }
+      .step-num { margin-bottom: 15px; }
+      .arch-flow { grid-template-columns: 1fr; }
+      .arrow { justify-self: center; transform: rotate(90deg); }
+      .node { min-height: 60px; }
+      .readiness { grid-template-columns: 1fr; gap: 12px; }
+      .dots { gap: 5px; margin: 0 3px; }
+      .nav-btn { min-width: 36px; padding: 6px 9px; }
+      .diagram-caption { font-size: .56rem; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    }
+    @media print {
+      :root { color-scheme: light; --ink: #101c2a; --muted: #445469; --line: #a8b7c7; }
+      body { min-width: 0; background: #fff; color: #101c2a; }
+      .deck { width: 100%; padding: 0; }
+      .topbar, .controls { display: none; }
+      main { display: block; padding: 0; }
+      .slide, .slide[hidden] { display: flex !important; flex-direction: column; justify-content: center; width: 100%; height: 100vh; padding: 2rem; break-after: page; animation: none; }
+      .slide:last-child { break-after: auto; }
+      .panel, .step-card, .status-card, .architecture, .mock-window, .diagram-frame { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="deck">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">GH</span> Copilot reporting</div>
+      <div class="edition">SOLUTION OVERVIEW&nbsp; / &nbsp;2026</div>
+    </header>
+
+    <main id="presentation" aria-label="Five-slide solution presentation">
+      <section class="slide cover" aria-labelledby="slide1-title" aria-hidden="false">
+        <div class="cover-grid">
+          <div>
+            <p class="eyebrow">01 / The solution</p>
+            <h1 id="slide1-title">A clearer view of <span class="accent">Copilot</span> at enterprise scale.</h1>
+            <p class="lede">A conditional, aggregate-only reporting system that turns approved usage, billing, and token sources into a privacy-conscious static dashboard.</p>
+            <div class="cover-meta">
+              <span class="pill">Python collector</span><span class="pill">Protected SQLite</span><span class="pill">Static dashboard</span>
+            </div>
+          </div>
+          <div class="diagram-frame">
+            <svg viewBox="0 0 600 390" role="img" aria-labelledby="cover-diagram-title cover-diagram-desc">
+              <title id="cover-diagram-title">Reporting system at a glance</title>
+              <desc id="cover-diagram-desc">Approved enterprise sources flow through a trusted collector and protected store to privacy-reviewed aggregates and a private static dashboard.</desc>
+              <defs>
+                <linearGradient id="glow" x1="0" x2="1"><stop stop-color="#55e0c0" stop-opacity=".2"/><stop offset="1" stop-color="#83b9ff" stop-opacity=".05"/></linearGradient>
+                <marker id="arrowhead" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0 0 8 4 0 8" fill="none" stroke="#66859e" stroke-width="1.3"/></marker>
+              </defs>
+              <path d="M34 55H566V333H34Z" fill="url(#glow)" opacity=".6"/>
+              <text x="48" y="38" fill="#9eb4ca" font-size="10" font-family="monospace" letter-spacing="2">APPROVED DATA PATH</text>
+              <g stroke="#66859e" stroke-width="1.6" fill="none" marker-end="url(#arrowhead)">
+                <path d="M144 141H204"/><path d="M295 141H355"/><path d="M446 141H502"/>
+                <path d="M144 253H204"/><path d="M295 253H355"/><path d="M446 253H502"/>
+              </g>
+              <g>
+                <rect x="48" y="99" width="96" height="84" rx="10" fill="#12253a" stroke="#41617b"/>
+                <circle cx="96" cy="123" r="9" fill="#173b42" stroke="#55e0c0"/><path d="M91 123h10M96 118v10" stroke="#55e0c0"/>
+                <text x="96" y="151" text-anchor="middle" fill="#eef5ff" font-size="11" font-family="system-ui">Enterprise APIs</text>
+                <text x="96" y="167" text-anchor="middle" fill="#9eb4ca" font-size="9" font-family="monospace">CSV fallback</text>
+
+                <rect x="204" y="99" width="91" height="84" rx="10" fill="#12253a" stroke="#41617b"/>
+                <rect x="236" y="115" width="27" height="20" rx="3" fill="#1c3945" stroke="#55e0c0"/><path d="M241 121h17M241 126h13" stroke="#55e0c0"/>
+                <text x="249" y="151" text-anchor="middle" fill="#eef5ff" font-size="11" font-family="system-ui">Collector</text>
+                <text x="249" y="167" text-anchor="middle" fill="#9eb4ca" font-size="9" font-family="monospace">validate · reconcile</text>
+
+                <rect x="355" y="99" width="91" height="84" rx="10" fill="#12253a" stroke="#41617b"/>
+                <ellipse cx="400" cy="119" rx="17" ry="7" fill="#26314b" stroke="#bea4ff"/><path d="M383 119v16c0 4 8 7 17 7s17-3 17-7v-16M383 127c0 4 8 7 17 7s17-3 17-7" fill="none" stroke="#bea4ff"/>
+                <text x="400" y="157" text-anchor="middle" fill="#eef5ff" font-size="11" font-family="system-ui">Protected store</text>
+                <text x="400" y="171" text-anchor="middle" fill="#9eb4ca" font-size="9" font-family="monospace">SQLite · encrypted</text>
+
+                <rect x="502" y="99" width="52" height="84" rx="10" fill="#12302d" stroke="#55e0c0"/>
+                <path d="M514 117h28v22h-28zM518 143h20M528 139v4" fill="none" stroke="#55e0c0" stroke-width="1.5"/>
+                <text x="528" y="158" text-anchor="middle" fill="#eef5ff" font-size="10" font-family="system-ui">Private</text>
+                <text x="528" y="171" text-anchor="middle" fill="#eef5ff" font-size="10" font-family="system-ui">Pages</text>
+              </g>
+              <rect x="48" y="211" width="506" height="82" rx="10" fill="#0d1d2c" stroke="#293e54"/>
+              <text x="67" y="237" fill="#55e0c0" font-size="10" font-family="monospace" letter-spacing="1">PRIVACY BOUNDARY</text>
+              <text x="67" y="260" fill="#eef5ff" font-size="14" font-family="system-ui">Raw records stay protected; only approved aggregates leave.</text>
+              <text x="67" y="279" fill="#9eb4ca" font-size="10" font-family="monospace">Cohort suppression · least privilege · explicit readiness gates</text>
+              <circle cx="520" cy="238" r="13" fill="#183731" stroke="#55e0c0"/><path d="m514 238 4 4 8-9" fill="none" stroke="#55e0c0" stroke-width="2"/>
+              <text x="48" y="351" fill="#8fa5bc" font-size="9" font-family="monospace">DESIGNED FOR PRIVATE, APPROVED ENTERPRISE REPORTING</text>
+            </svg>
+            <div class="diagram-caption"><span>SOURCE → TRUSTED PIPELINE → AUDIENCE</span><strong>AGGREGATES ONLY</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" aria-labelledby="slide2-title" aria-hidden="true" hidden>
+        <p class="eyebrow">02 / Data pipeline</p>
+        <div class="section-head">
+          <h2 id="slide2-title">From source signals to a <span class="accent-blue">reliable snapshot.</span></h2>
+          <p class="lede">A trusted operator workflow collects, checks, and prepares data before the browser ever sees it.</p>
+        </div>
+        <div class="pipeline">
+          <article class="step-card">
+            <span class="step-num">01</span><h3>Collect approved sources</h3>
+            <p>Enterprise usage, seat and billing APIs, plus a strict local token CSV fallback when approved.</p>
+            <div class="tag-row"><span class="tag">scoped credentials</span><span class="tag">source status</span></div>
+          </article>
+          <article class="step-card">
+            <span class="step-num">02</span><h3>Validate &amp; reconcile</h3>
+            <p>Normalize dates and units, preserve unknowns, reject malformed imports, and detect incomplete periods.</p>
+            <div class="tag-row"><span class="tag">UTC windows</span><span class="tag">idempotent updates</span></div>
+          </article>
+          <article class="step-card">
+            <span class="step-num">03</span><h3>Persist protected history</h3>
+            <p>Keep raw snapshots, checkpoints, and approved archives in a protected SQLite store—not in the repository.</p>
+            <div class="tag-row"><span class="tag">encrypted volume</span><span class="tag">retention policy</span></div>
+          </article>
+          <article class="step-card">
+            <span class="step-num">04</span><h3>Publish reviewed output</h3>
+            <p>Generate a small allowlisted static site and aggregate JSON for an already-private project Pages audience.</p>
+            <div class="tag-row"><span class="tag">static assets</span><span class="tag">no browser secrets</span></div>
+          </article>
+        </div>
+        <div class="strip"><strong>Resilient by design</strong><span>Failed sources retain last-good partitions with visible status and coverage warnings; an updated build never implies fresh data.</span></div>
+      </section>
+
+      <section class="slide" aria-labelledby="slide3-title" aria-hidden="true" hidden>
+        <p class="eyebrow">03 / Security &amp; privacy</p>
+        <div class="section-head">
+          <h2 id="slide3-title">Make the <span class="accent">trust boundary</span> explicit.</h2>
+          <p class="lede">The dashboard is a read-only window onto a deliberately limited publication—not an access-control layer.</p>
+        </div>
+        <div class="boundary-layout">
+          <div class="architecture">
+            <div class="arch-label"><span>Protected collection environment</span><span>Trust boundary</span></div>
+            <div class="trust-boundary">
+              <div class="boundary-title"><span aria-hidden="true">◆</span> Trusted operator runner · encrypted persistent mount</div>
+              <div class="arch-flow">
+                <div class="node"><strong>Enterprise</strong><span>API + approved imports</span></div><span class="arrow" aria-hidden="true">→</span>
+                <div class="node"><strong>Collector / SQLite</strong><span>raw records · checkpoints</span></div><span class="arrow" aria-hidden="true">→</span>
+                <div class="node output"><strong>Publisher</strong><span>privacy-approved aggregates</span></div>
+              </div>
+            </div>
+            <div class="outside-note"><span aria-hidden="true">↗</span><span><b>Outside the boundary:</b> private static Pages serves only the approved artifact. Every reader can download all published aggregates, including values hidden by UI filters.</span></div>
+          </div>
+          <div class="guardrails">
+            <div class="guardrail"><span class="guard-icon">01</span><p><strong>Default-deny approvals</strong><br>Tenant scope, audience, billing, and cost-center publication require explicit approval.</p></div>
+            <div class="guardrail"><span class="guard-icon">02</span><p><strong>Small-cohort protection</strong><br>Minimum cohort suppression reduces exposure; it does not replace privacy review.</p></div>
+            <div class="guardrail"><span class="guard-icon">03</span><p><strong>Fail closed</strong><br>Deployment checks repository ownership and actual private Pages settings before publishing.</p></div>
+            <div class="guardrail"><span class="guard-icon">04</span><p><strong>No identity drilldown</strong><br>No named-user views, browser credentials, uploads, or privileged API calls from the site.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" aria-labelledby="slide4-title" aria-hidden="true" hidden>
+        <p class="eyebrow">04 / Reporting experience</p>
+        <div class="section-head">
+          <h2 id="slide4-title">Useful signals, <span class="accent-violet">without false precision.</span></h2>
+          <p class="lede">One static dashboard brings adoption, model activity, billing, tokens, and source quality together.</p>
+        </div>
+        <div class="dashboard-layout">
+          <div class="mock-window" aria-label="Illustrative dashboard interface">
+            <div class="window-bar"><i></i><i></i><i></i> / reporting / approved snapshot</div>
+            <div class="mock-content">
+              <div class="mock-title">Enterprise overview <span>UTC · READ ONLY</span></div>
+              <div class="metric-row">
+                <div class="metric"><small>Usage &amp; adoption</small><b>Daily</b><span class="mini">source-aware</span></div>
+                <div class="metric"><small>Billing</small><b>By unit</b><span class="mini">no inferred totals</span></div>
+                <div class="metric"><small>Tokens</small><b>4 types</b><span class="mini">kept separate</span></div>
+              </div>
+              <div class="chart">
+                <div class="chart-label">Daily source coverage &amp; activity · illustrative layout</div>
+                <svg viewBox="0 0 560 78" role="img" aria-label="Decorative illustrative trend lines without data values">
+                  <path d="M0 62H560M0 40H560M0 18H560" stroke="#2b4056" stroke-width="1"/>
+                  <path d="M6 59 C45 56 55 39 94 44 S152 49 188 29 250 37 286 31 355 18 391 29 452 16 490 19 529 10 554 14" fill="none" stroke="#55e0c0" stroke-width="2.5"/>
+                  <path d="M6 67 C49 62 62 64 94 54 S149 60 188 49 249 54 286 41 350 46 391 40 451 51 490 35 527 39 554 29" fill="none" stroke="#83b9ff" stroke-width="2" stroke-dasharray="5 5"/>
+                  <circle cx="554" cy="14" r="3.5" fill="#55e0c0"/><circle cx="554" cy="29" r="3.5" fill="#83b9ff"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+          <div class="dashboard-notes">
+            <div class="dash-note"><span class="glyph">↗</span><p><strong>Explore the period.</strong> Filter by date, model, and cost center where source data supports it; export visible tables as CSV.</p></div>
+            <div class="dash-note"><span class="glyph">∑</span><p><strong>Respect measure boundaries.</strong> Billing units and currencies stay distinct; input, output, cache-read, and cache-write are not summed.</p></div>
+            <div class="dash-note"><span class="glyph">≈</span><p><strong>Show what is known.</strong> “Unavailable” is not zero; daily actives are not additive and today’s seats do not reconstruct historical rosters.</p></div>
+            <div class="dash-note"><span class="glyph">!</span><p><strong>Make data quality visible.</strong> Source freshness, missing dates, and reconciliation notes travel with the report.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" aria-labelledby="slide5-title" aria-hidden="true" hidden>
+        <p class="eyebrow">05 / Readiness &amp; next steps</p>
+        <div class="section-head">
+          <h2 id="slide5-title">Designed to be gated. <span class="accent-amber">Not yet live.</span></h2>
+          <p class="lede">The implementation is a conditional foundation. Tenant approval and operational acceptance come before a pilot.</p>
+        </div>
+        <div class="readiness">
+          <article class="status-card ready">
+            <div class="status-head"><h3>Implemented foundation</h3><span class="status-label">IN REPOSITORY</span></div>
+            <ul class="checklist">
+              <li>Standard-library Python collector and protected SQLite history</li>
+              <li>Aggregate transformation, cohort suppression, and static dashboard</li>
+              <li>Fail-closed publication preflight and strict artifact allowlist</li>
+              <li>Synthetic demo and automated tests—no live enterprise data</li>
+            </ul>
+          </article>
+          <article class="status-card">
+            <div class="status-head"><h3>Before a live pilot</h3><span class="status-label">PENDING</span></div>
+            <ul class="checklist">
+              <li>Tenant access and source-schema validation; reconcile representative exports</li>
+              <li>Finance, privacy, architecture, and publication-audience approval</li>
+              <li>Private organization project Pages, protected runner, encrypted storage, and secrets</li>
+              <li>Verify access denial, backups, recovery, retention, alerting, and operations</li>
+            </ul>
+          </article>
+        </div>
+        <div class="final-note"><strong>Current status:</strong> approval gates are not satisfied; live collection and deployment are not approved. The personal-owner repository is not an eligible enterprise Pages target. Different audiences or row-level access would require a separately designed authenticated backend.</div>
+      </section>
+    </main>
+
+    <footer class="controls" aria-label="Slide navigation">
+      <div class="slide-count"><span id="counter">01 / 05</span><div class="progress-track" aria-hidden="true"><div class="progress-fill" id="progress"></div></div></div>
+      <nav class="button-row" aria-label="Choose slide">
+        <button class="nav-btn" id="previous" type="button" aria-label="Previous slide" disabled>←</button>
+        <div class="dots">
+          <button class="dot" type="button" data-slide="0" aria-label="Go to slide 1" aria-current="true"></button>
+          <button class="dot" type="button" data-slide="1" aria-label="Go to slide 2" aria-current="false"></button>
+          <button class="dot" type="button" data-slide="2" aria-label="Go to slide 3" aria-current="false"></button>
+          <button class="dot" type="button" data-slide="3" aria-label="Go to slide 4" aria-current="false"></button>
+          <button class="dot" type="button" data-slide="4" aria-label="Go to slide 5" aria-current="false"></button>
+        </div>
+        <button class="nav-btn" id="next" type="button" aria-label="Next slide">→</button>
+      </nav>
+      <span class="sr-only" id="announcement" aria-live="polite"></span>
+    </footer>
+  </div>
+  <script>
+    const slides = [...document.querySelectorAll(".slide")];
+    const dots = [...document.querySelectorAll(".dot")];
+    const previous = document.querySelector("#previous");
+    const next = document.querySelector("#next");
+    const counter = document.querySelector("#counter");
+    const progress = document.querySelector("#progress");
+    const announcement = document.querySelector("#announcement");
+    let current = 0;
+
+    function showSlide(index) {
+      current = Math.max(0, Math.min(slides.length - 1, index));
+      slides.forEach((slide, i) => {
+        const active = i === current;
+        slide.hidden = !active;
+        slide.setAttribute("aria-hidden", String(!active));
+      });
+      dots.forEach((dot, i) => dot.setAttribute("aria-current", String(i === current)));
+      previous.disabled = current === 0;
+      next.disabled = current === slides.length - 1;
+      counter.textContent = `${String(current + 1).padStart(2, "0")} / ${String(slides.length).padStart(2, "0")}`;
+      progress.style.width = `${((current + 1) / slides.length) * 100}%`;
+      announcement.textContent = `Slide ${current + 1} of ${slides.length}: ${slides[current].querySelector("h1, h2").textContent}`;
+    }
+
+    previous.addEventListener("click", () => showSlide(current - 1));
+    next.addEventListener("click", () => showSlide(current + 1));
+    dots.forEach((dot) => dot.addEventListener("click", () => showSlide(Number(dot.dataset.slide))));
+    document.addEventListener("keydown", (event) => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      if (["ArrowRight", "PageDown", " "].includes(event.key)) {
+        event.preventDefault();
+        showSlide(current + 1);
+      } else if (["ArrowLeft", "PageUp"].includes(event.key)) {
+        event.preventDefault();
+        showSlide(current - 1);
+      } else if (event.key === "Home") {
+        showSlide(0);
+      } else if (event.key === "End") {
+        showSlide(slides.length - 1);
+      }
+    });
+  </script>
+</body>
+</html>
